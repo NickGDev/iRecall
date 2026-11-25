@@ -1,5 +1,8 @@
-// Recall tray app — menu-bar status + control for the local recall server.
-// Compiled by scripts/install-mac.sh into Recall.app/Contents/MacOS/Recall.
+// Recall tray app — menu-bar status + control, and supervisor for the local
+// recall server. Compiled by scripts/build-app.sh into Recall.app; the server
+// runs as a child (Contents/MacOS/node on Resources/app/server/dist/main.js)
+// with its DB + token in ~/Library/Application Support/Recall, so quitting the
+// tray quits everything and a crashed server respawns automatically.
 import AppKit
 
 let base = URL(string: "http://127.0.0.1:8787")!
@@ -11,6 +14,8 @@ final class Tray: NSObject, NSApplicationDelegate {
     private var healthy = false
     private var recording = true
     private var token: String?
+    private var server: Process?
+    private var quitting = false
 
     func applicationDidFinishLaunching(_: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -29,9 +34,59 @@ final class Tray: NSObject, NSApplicationDelegate {
         [toggleItem, dashboard].forEach { $0.target = self }
         item.menu = menu
 
+        startServer()
         refresh()
         let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in self?.refresh() }
         RunLoop.main.add(timer, forMode: .common)
+    }
+
+    func applicationWillTerminate(_: Notification) {
+        quitting = true
+        guard let server = server, server.isRunning else { return }
+        server.interrupt() // SIGTERM — node exits, SQLite WAL checkpoints
+    }
+
+    // --- server supervision ------------------------------------------------------
+
+    private lazy var appSupportDir: URL = {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Recall", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    private func startServer() {
+        guard !quitting,
+              let res = Bundle.main.resourceURL?.appendingPathComponent("app", isDirectory: true),
+              let node = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("node")
+        else { return }
+        let logPath = appSupportDir.appendingPathComponent("server.log")
+        if !FileManager.default.fileExists(atPath: logPath.path) {
+            FileManager.default.createFile(atPath: logPath.path, contents: nil, attributes: [.posixPermissions: 0o600])
+        }
+        guard let log = try? FileHandle(forWritingTo: logPath) else { return }
+        let _ = try? log.seekToEnd()
+
+        let proc = Process()
+        proc.executableURL = node
+        proc.arguments = ["--max-old-space-size=384", "dist/main.js"]
+        proc.currentDirectoryURL = res.appendingPathComponent("server", isDirectory: true)
+        var env = ProcessInfo.processInfo.environment
+        env["RECALL_DB_PATH"] = appSupportDir.appendingPathComponent("recall.db").path
+        env["RECALL_TOKEN_PATH"] = appSupportDir.appendingPathComponent(".token").path
+        proc.environment = env
+        proc.standardOutput = log
+        proc.standardError = log
+        proc.terminationHandler = { [weak self] _ in
+            // KeepAlive parity: fixed 3s gap, respawn until the app quits.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self?.startServer() }
+        }
+        do {
+            try proc.run()
+            server = proc
+        } catch {
+            fputs("recall: server spawn failed: \(error)\n", stderr)
+        }
     }
 
     private func refresh() {

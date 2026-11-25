@@ -14,9 +14,16 @@ import { embedOne } from './embeddings.js';
 const PORT = 8787;
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..');
-const TOKEN_PATH = path.join(root, '.token');
-const DB_PATH = path.join(root, 'data', 'recall.db');
+// Data paths are overridable so the .app bundle can keep the DB + token in
+// ~/Library/Application Support/Recall (survives app replacement) while the
+// defaults preserve the repo layout for dev + install-mac.sh.
+const TOKEN_PATH = process.env.RECALL_TOKEN_PATH ?? path.join(root, '.token');
+const DB_PATH = process.env.RECALL_DB_PATH ?? path.join(root, 'data', 'recall.db');
 const PUBLIC_DIR = path.join(root, 'public');
+
+// History DB + token are private to the user account (the LaunchAgent set
+// Umask 0077; same guarantee for the .app-spawned child and dev runs).
+process.umask(0o077);
 
 const store = createStore(DB_PATH);
 

@@ -1,15 +1,17 @@
-# Release build: everything heavy lives as release assets, never in git.
-# - build job: compiles the server and bundles it with prod node_modules
-#   (native deps are platform-specific — runs on macos-15 arm64) and zips the
-#   extension unpacked. Attaches artifacts + SHA256SUMS to the tag's release.
+# Release build: one self-contained artifact + the model bundle, never in git.
+# - build job: fetches recall-models.tar.gz from the previous latest release
+#   (re-attached to the new release, so the chain keeps propagating), compiles
+#   the server + extension, and assembles Recall.app — bundled node runtime,
+#   tray (swiftc), prod node_modules, models, unpacked extension. Users need no
+#   node/npm/Xcode. Unsigned: Gatekeeper asks for right-click-open once.
 # - model bundles are built by .github/workflows/models.yml (manual dispatch):
-#   the tag-triggered heavy-download job was auto-cancelled by GitHub's abuse
-#   detection on this new repo. Models rarely change; rebuild + re-upload that
-#   bundle only when the model version bumps.
-# No keys or secrets: the CRX signing key is generated locally by
-# scripts/pack-extension.mjs on the user's machine (keys/, gitignored) — CI
-# never signs, so the extension zip is for loading unpacked; pack locally to
-# get the pinned-ID CRX.
+#   the tag-triggered heavy downloads were auto-cancelled by GitHub's abuse
+#   detection on this new repo. Bump models: run models.yml, upload
+#   recall-models.tar.gz to the latest release, then tag.
+# - First-ever release: no models asset exists yet — build fails with a clear
+#   fetch-models.sh error; run models.yml, upload to a draft release, re-tag.
+# - No keys or secrets: CRX signing stays local (scripts/pack-extension.mjs);
+#   the extension ships unpacked inside the app for Load-unpacked / repack.
 name: release
 on:
   push:
@@ -27,26 +29,16 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run build:server
-      - run: npm run build:ext
-      - name: Bundle server (compiled dist + prod node_modules)
-        run: |
-          npm prune --omit=dev
-          tar -czf recall-server-macos-arm64.tar.gz \
-            server/dist server/public/index.html server/public/rules.html \
-            package.json node_modules
-      - name: Bundle extension (unpacked; CRX is packed locally with the user's key)
-        run: zip -qr recall-extension.zip extension -x 'extension/node_modules/*'
+      - name: Fetch model bundle from previous latest release (or HF for granite)
+        env:
+          RECALL_REPO: ${{ github.repository }}
+        run: bash scripts/fetch-models.sh
+      - name: Build Recall.app
+        run: bash scripts/build-app.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: recall-server
-          path: recall-server-macos-arm64.tar.gz
-          retention-days: 3
-          compression-level: 0
-      - uses: actions/upload-artifact@v4
-        with:
-          name: recall-extension
-          path: recall-extension.zip
+          name: recall-app
+          path: Recall-app-macos-arm64.zip
           retention-days: 3
           compression-level: 0
 
@@ -55,13 +47,18 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          merge-multiple: true
+          name: recall-app
+      - name: Fetch model bundle for re-attachment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release download -p 'recall-models.tar.gz' -O recall-models.tar.gz --clobber
       - run: |
-          sha256sum recall-models.tar.gz recall-server-macos-arm64.tar.gz recall-extension.zip > SHA256SUMS
+          sha256sum Recall-app-macos-arm64.zip recall-models.tar.gz > SHA256SUMS
           cat SHA256SUMS
       - name: Attach artifacts to tag release
         run: gh release create "$GITHUB_REF_NAME" --generate-notes \
-              recall-models.tar.gz recall-server-macos-arm64.tar.gz recall-extension.zip SHA256SUMS
+              Recall-app-macos-arm64.zip recall-models.tar.gz SHA256SUMS
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

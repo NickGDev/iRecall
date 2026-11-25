@@ -10,6 +10,20 @@ via enterprise policy.** Phases 4–6 below.
 
 ## Install (macOS)
 
+**From a release (no toolchain needed):** download `Recall-app-macos-arm64.zip`
+from the latest GitHub release, unzip, drag `Recall.app` into Applications,
+right-click → Open once (unsigned app, Gatekeeper asks). Everything ships
+inside the bundle — node runtime, models, extension, tray — and the tray
+supervises the server as a child process (Quit stops both; crashes respawn).
+Data lives in `~/Library/Application Support/Recall/` (`recall.db`, `.token`,
+`server.log`) and survives app replacement. Start-at-login: System Settings →
+General → Login Items → add Recall.
+
+Extension: `chrome://extensions` → Developer mode → Load unpacked →
+`/Applications/Recall.app/Contents/Resources/app/extension`.
+
+**From source (dev / CRX force-install flow):**
+
 ```bash
 ./scripts/install-mac.sh
 ```
@@ -137,17 +151,19 @@ staleness flags; `get_page(id)` — full page text (truncated at 20k chars);
 ## Releases
 
 Artifacts never live in git (`server/models/`, built CRX, compiled dist are all
-ignored). Pushing a `v*` tag runs the release workflow:
+ignored). Models are a manual job (Actions → models → Run workflow, then upload
+`recall-models.tar.gz` to the latest release): tag-triggered model downloads
+were auto-cancelled by GitHub's abuse detection on this repo. Pushing a `v*`
+tag then runs release:
 
-- **models** — rebuilds julia-1.5-fp16 from the public SupersonicLabs
-  safetensors (parity-gated via `PARITY PASS`) and bundles it with granite q8
-  from HF → `recall-models.tar.gz`
-- **build** — macos-14 arm64: compiled server dist + prod `node_modules` +
-  unpacked extension zip. CI never signs the CRX; run `npm run pack:ext`
-  locally (generates `keys/recall-key.pem` on first use) for the pinned-ID CRX.
-- **release** — attaches artifacts + SHA256SUMS to the GitHub release.
+- **build** — macos-15 arm64: fetches the model bundle from the previous latest
+  release and assembles a self-contained `Recall.app` (bundled node runtime,
+  swiftc tray, prod `node_modules`, models, unpacked extension) via
+  `scripts/build-app.sh`. Unsigned — users right-click-open once.
+- **release** — attaches `Recall-app-macos-arm64.zip` + `recall-models.tar.gz`
+  (re-attached, so the chain propagates to future builds) + SHA256SUMS.
 
-Fresh machine: clone, then `scripts/install-mac.sh` — it compiles, fetches
-models from the latest release (or HF for granite) via
-`scripts/fetch-models.sh`, and installs the LaunchAgent. No keys are stored in
-the repo or CI; the CRX key is generated on the user's machine.
+No keys are stored in the repo or CI; the CRX key is generated on the user's
+machine (`npm run pack:ext`, first use creates `keys/recall-key.pem`) for the
+pinned-ID CRX. Dev machines: clone, then `scripts/install-mac.sh` (LaunchAgents
++ Chrome force-install policy) or `scripts/build-app.sh` for the bundle.

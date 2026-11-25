@@ -13,3 +13,5 @@ server/models/
 server/dist/
 server/public/recall.crx
 server/public/updates.xml
+Recall.app/
+Recall-app-*.zip
