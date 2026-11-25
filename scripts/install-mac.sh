@@ -27,7 +27,15 @@ node scripts/pack-extension.mjs
 EXT_ID="$(sed -n 's/.*appid="\([a-p]\{32\}\)".*/\1/p' "$PROJECT/server/public/updates.xml")"
 echo "extension id: $EXT_ID"
 
-echo "-- tray app (swiftc)"
+echo "-- tray app (Tauri shell)"
+# Cross-platform Rust tray (src-tauri) built by scripts/build-app.sh; build
+# it on the spot when missing. Prefer an existing /Applications copy (survives
+# app cleaners better); fall back to a project-local bundle.
+APP_DST="$PROJECT/Recall.app"
+[ -d /Applications/Recall.app ] && APP_DST="/Applications/Recall.app"
+[ -d "$APP_DST" ] || bash "$PROJECT/scripts/build-app.sh"
+codesign --force --deep -s - "$APP_DST" 2>/dev/null || true
+echo "tray app ($APP_DST: menu bar: state, dashboard, pause, quit)"
 # Prefer an existing /Applications copy (survives app cleaners better); fall
 # back to a project-local bundle.
 APP_DST="$PROJECT/Recall.app"

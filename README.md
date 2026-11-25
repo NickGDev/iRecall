@@ -44,16 +44,19 @@ Claude via MCP.
 
 ## 🚀 Try it
 
-**From a release** (macOS, Apple silicon — no toolchain needed):
+**From a release** (macOS arm64/x64, Linux x64/arm64, Windows x64 — no
+toolchain needed):
 
-1. Grab `Recall-app-macos-arm64.zip` from the
+1. Grab your platform's bundle (`Recall-app-macos-arm64.zip`,
+   `Recall-app-macos-x64.zip`, `*.deb` / `*.AppImage`, or the Windows
+   `*-setup.exe`) from the
    [latest release](https://github.com/NickGDev/recall/releases), unzip, drag
    `Recall.app` into Applications.
 2. Right-click → **Open** once (it's unsigned; Gatekeeper asks, you're the
    Gatekeeper). Everything is inside the bundle: node runtime, models,
    extension, menu-bar tray.
 3. Load the extension: `chrome://extensions` → Developer mode → **Load
-   unpacked** → `Recall.app/Contents/Resources/app/extension`.
+   unpacked** → `Recall.app/Contents/Resources/binaries/extension`.
 
 That's it — an **R** appears in your menu bar (white = recording). Read stuff,
 then open <http://127.0.0.1:8787> and search your brain. Data lives in
@@ -87,8 +90,8 @@ crash) and caches models under `server/models` — fully offline after install.
   stable ID `cafcekahohdjjdgongnpbbigkgccokec`), served from
   `http://127.0.0.1:8787/updates.xml`; it fetches its auth token from
   `/bootstrap` — no manual paste
-- **Recall.app** tray (compiled Swift, LSUIElement): `R` monogram — white
-  recording / dimmed paused / gray server-down. Menu: status, Open Dashboard,
+- **Recall.app** tray (Rust/Tauri, menu-bar accessory app): logo icon + `R`
+  title. Menu: status, Open Dashboard,
   Pause/Resume, Quit. LaunchAgent `dev.recall.tray`. The recording flag lives
   on the server (`/config`) — tray, dashboard, and popup all write there; the
   extension mirrors it within ~60s
@@ -205,11 +208,12 @@ upload `recall-models.tar.gz` to the latest release) — tag-triggered model
 downloads get auto-cancelled by GitHub's abuse detection on this repo.
 Pushing a `v*` tag runs the release workflow:
 
-- **build** — macos-15 arm64: fetches the model bundle from the previous
-  latest release and assembles a self-contained `Recall.app` (bundled node
-  runtime, swiftc tray, prod `node_modules`, models, unpacked extension) via
-  `scripts/build-app.sh`. Unsigned — users right-click-open once.
-- **release** — attaches `Recall-app-macos-arm64.zip` + `recall-models.tar.gz`
+- **build** — 5-target matrix (macOS arm64/x64, Linux x64/arm64, Windows x64):
+  fetches the model bundle from the previous latest release, compiles the Rust
+  tray (`src-tauri`) + server + extension, and assembles a self-contained
+  bundle (bundled node runtime, tray, prod `node_modules`, models, unpacked
+  extension). Unsigned — macOS users right-click-open once.
+- **release** — attaches the per-platform bundles + `recall-models.tar.gz`
   (re-attached each release so the chain propagates) + SHA256SUMS.
 
 No keys are stored in the repo or CI; the CRX key is generated on your machine

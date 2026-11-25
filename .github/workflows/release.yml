@@ -1,17 +1,18 @@
-# Release build: one self-contained artifact + the model bundle, never in git.
-# - build job: fetches recall-models.tar.gz from the previous latest release
-#   (re-attached to the new release, so the chain keeps propagating), compiles
-#   the server + extension, and assembles Recall.app — bundled node runtime,
-#   tray (swiftc), prod node_modules, models, unpacked extension. Users need no
-#   node/npm/Xcode. Unsigned: Gatekeeper asks for right-click-open once.
-# - model bundles are built by .github/workflows/models.yml (manual dispatch):
-#   the tag-triggered heavy downloads were auto-cancelled by GitHub's abuse
-#   detection on this new repo. Bump models: run models.yml, upload
-#   recall-models.tar.gz to the latest release, then tag.
-# - First-ever release: no models asset exists yet — build fails with a clear
-#   fetch-models.sh error; run models.yml, upload to a draft release, re-tag.
-# - No keys or secrets: CRX signing stays local (scripts/pack-extension.mjs);
-#   the extension ships unpacked inside the app for Load-unpacked / repack.
+# Release build: cross-platform Tauri bundles (Rust tray shell in src-tauri)
+# + the model bundle, never in git.
+# - matrix build: each runner compiles the tray (cargo), fetches the
+#   arch-matched node sidecar (scripts/fetch-node.sh), compiles server +
+#   extension, stages the runtime tree (scripts/stage-runtime.sh), and
+#   bundles per-OS via tauri-cli. Native modules (better-sqlite3,
+#   onnxruntime-node, sqlite-vec) build for the runner arch — one bundle per
+#   target, no cross-compilation.
+# - macOS bundles: unsigned .app zipped (Gatekeeper right-click-open once).
+#   macos-15-intel provides the x64 build; if GitHub renames/retires that
+#   label (see the macos-14 retirement), pin whatever intel runner exists.
+# - linux: deb + AppImage on x64 (ubuntu-22.04 for the oldest glibc) and
+#   arm64 (ubuntu-24.04-arm). windows: NSIS setup exe.
+# - model bundles are built by models.yml (manual dispatch) and re-attached
+#   here so fetch-models.sh keeps working offline.
 name: release
 on:
   push:
@@ -21,44 +22,98 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            triple: aarch64-apple-darwin
+            bundles: app
+            appdir: macos/Recall.app
+            zip: Recall-app-macos-arm64.zip
+          - os: macos-15-intel
+            triple: x86_64-apple-darwin
+            bundles: app
+            zip: Recall-app-macos-x64.zip
+            appdir: macos/Recall.app
+          - os: ubuntu-22.04
+            triple: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+            appdir: ''
+          - os: ubuntu-24.04-arm
+            triple: aarch64-unknown-linux-gnu
+            bundles: deb,appimage
+            appdir: ''
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+            bundles: nsis
+            appdir: ''
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+      - uses: dtolnay/rust-stable@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Linux build deps (webkit + tray)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - run: npm ci
       - name: Fetch model bundle from previous latest release (or HF for granite)
         env:
           RECALL_REPO: ${{ github.repository }}
         run: bash scripts/fetch-models.sh
-      - name: Build Recall.app
-        run: bash scripts/build-app.sh
+      - name: Stage runtime (node sidecar + server tree + extension)
+        run: bash scripts/stage-runtime.sh "${{ matrix.triple }}"
+      - name: Regenerate icons (adds icon.ico for the Windows bundler)
+        run: npx --yes "@tauri-apps/cli@^2" icon assets/logo.png
+      - name: Tauri build
+        run: npx --yes "@tauri-apps/cli@^2" build --bundles ${{ matrix.bundles }}
+      - name: Package macOS zip
+        if: runner.os == 'macOS'
+        run: |
+          APP="src-tauri/target/release/bundle/${{ matrix.appdir }}"
+          codesign --force --deep -s - "$APP"
+          rm -f "${{ matrix.zip }}"
+          ditto -c -k --keepParent "$APP" "${{ matrix.zip }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: recall-app
-          path: Recall-app-macos-arm64.zip
+          name: recall-${{ matrix.triple }}
+          path: |
+            Recall-app-*.zip
+            src-tauri/target/release/bundle/**/*.deb
+            src-tauri/target/release/bundle/**/*.AppImage
+            src-tauri/target/release/bundle/**/*.exe
           retention-days: 3
           compression-level: 0
 
   release:
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: recall-app
+          pattern: recall-*
+          merge-multiple: true
+          path: dist
       - name: Fetch model bundle for re-attachment
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release download -p 'recall-models.tar.gz' -O recall-models.tar.gz --clobber
-      - run: |
-          sha256sum Recall-app-macos-arm64.zip recall-models.tar.gz > SHA256SUMS
+        run: gh release download -p 'recall-models.tar.gz' -O dist/recall-models.tar.gz --clobber
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
           cat SHA256SUMS
       - name: Attach artifacts to tag release
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes \
-              Recall-app-macos-arm64.zip recall-models.tar.gz SHA256SUMS
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes dist/*
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
