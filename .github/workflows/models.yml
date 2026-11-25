@@ -1,0 +1,72 @@
+# Model bundle rebuild - manual only (Actions tab -> Run workflow).
+# Heavy downloads (torch, safetensors, model files) inside the tag-triggered
+# release workflow were auto-cancelled by GitHub's abuse detection on this
+# new repo, so model builds are a deliberate, human-initiated job instead.
+# Produces recall-models.tar.gz: julia-1.5-fp16 (rebuilt from public
+# SupersonicLabs sources, parity-gated) + granite q8 (public HF). Run when
+# the model version bumps, then upload to the current release.
+name: models
+on:
+  workflow_dispatch:
+
+jobs:
+  models:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v5
+      - name: Fetch Julia-1.5 training/runtime sources (public HF)
+        run: |
+          mkdir -p /tmp/julia15/tokenizer /tmp/julia15/encoder \
+                   /tmp/julia15/runtime/julia15 /tmp/julia15/runtime/tests/fixtures
+          base=https://huggingface.co/SupersonicLabs/Julia-1.5/resolve/main
+          curl -fsSL -o /tmp/julia15/model.safetensors   "$base/model.safetensors"
+          curl -fsSL -o /tmp/julia15/julia_config.json   "$base/julia_config.json"
+          curl -fsSL -o /tmp/julia15/encoder/config.json "$base/encoder/config.json"
+          curl -fsSL -o /tmp/julia15/tokenizer/tokenizer.json "$base/tokenizer/tokenizer.json"
+          curl -fsSL -o /tmp/julia15/tokenizer/tokenizer_config.json "$base/tokenizer/tokenizer_config.json"
+          for f in __init__.py encoding.py engine.py runtime.py server.py __main__.py; do
+            curl -fsSL -o "/tmp/julia15/runtime/julia15/$f" "$base/runtime/julia15/$f"
+          done
+          curl -fsSL -o /tmp/julia15/runtime/tests/fixtures/reference.json \
+            "$base/runtime/tests/fixtures/reference.json"
+      - name: Export fp32 (parity-gated)
+        run: |
+          cd scripts/julia15-export
+          uv venv
+          # CPU-only torch: the default wheel pulls ~3GB of CUDA deps useless on runners
+          uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+          uv pip install onnx onnxruntime onnxscript transformers tokenizers
+          uv run python padded_model.py
+          uv run python export_and_check.py | tee /tmp/export.log
+          grep -q 'PARITY PASS' /tmp/export.log || { echo 'parity gate failed'; exit 1; }
+      - name: Build fp16 variant + fetch granite q8 + bundle
+        run: |
+          mkdir -p server/models/julia-1.5 server/models/julia-1.5-fp16/wasm \
+                   server/models/onnx-community/granite-embedding-small-english-r2-ONNX/onnx
+          cp /tmp/julia15/model.onnx server/models/julia-1.5/
+          cp /tmp/julia15/model.onnx.data server/models/julia-1.5/
+          cp /tmp/julia15/tokenizer/tokenizer.json server/models/julia-1.5/tokenizer.json
+          cp server/models/julia-1.5/tokenizer.json server/models/julia-1.5-fp16/tokenizer.json
+          jb=https://huggingface.co/SupersonicLabs/Julia-1-ONNX/resolve/main
+          for f in julia_webgpu_encode.js julia_webgpu_encode_bg.wasm; do
+            curl -fsSL -o "server/models/julia-1.5-fp16/wasm/$f" "$jb/wasm/$f"
+          done
+          uv run --with onnxruntime --with onnx --with numpy python scripts/julia15-export/quantize_q8.py
+          g=server/models/onnx-community/granite-embedding-small-english-r2-ONNX
+          gb=https://huggingface.co/onnx-community/granite-embedding-small-english-r2-ONNX/resolve/main
+          for f in config.json special_tokens_map.json tokenizer.json tokenizer_config.json; do
+            curl -fsSL -o "$g/$f" "$gb/$f"
+          done
+          curl -fsSL -o "$g/onnx/model_quantized.onnx" "$gb/onnx/model_quantized.onnx"
+          curl -fsSL -o "$g/onnx/model_quantized.onnx_data" "$gb/onnx/model_quantized.onnx_data"
+          tar -czf recall-models.tar.gz -C server/models julia-1.5-fp16 onnx-community
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recall-models
+          path: recall-models.tar.gz
+          retention-days: 3
+          compression-level: 0
