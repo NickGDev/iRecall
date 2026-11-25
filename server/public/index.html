@@ -1228,7 +1228,7 @@
         return 'Chrome force-install policy missing — reinstall re-adds it';
       }
       function extHintText(s) {
-        return 'Chrome ≥137 only honors force-install on MDM-managed browsers. If the extension is missing: chrome://extensions → Developer mode → Load unpacked → ' + (s.extPath || '/Users/nick/dev/recall/extension');
+        return 'Chrome ≥137 only honors force-install on MDM-managed browsers. If the extension is missing: chrome://extensions → Developer mode → Load unpacked → ' + (s.extPath || 'the extension/ folder of your recall checkout');
       }
       async function loadExtension() {
         const s = await api('/api/extension');

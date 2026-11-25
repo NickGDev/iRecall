@@ -20,12 +20,12 @@ text stays in the DB).
 ## Run / register
 
 ```bash
-# Claude Code
-claude mcp add recall -- node /Users/nick/dev/recall/node_modules/tsx/dist/cli.mjs /Users/nick/dev/recall/mcp/src/main.ts
+# Claude Code (from the repo root)
+claude mcp add recall -- node "$PWD/node_modules/tsx/dist/cli.mjs" "$PWD/mcp/src/main.ts"
 
 # Claude Desktop (claude_desktop_config.json)
 { "mcpServers": { "recall": { "command": "node",
-  "args": ["/Users/nick/dev/recall/node_modules/tsx/dist/cli.mjs", "/Users/nick/dev/recall/mcp/src/main.ts"] } } }
+  "args": ["/absolute/path/to/recall/node_modules/tsx/dist/cli.mjs", "/absolute/path/to/recall/mcp/src/main.ts"] } } }
 ```
 
 Auth: reads the bearer token from `server/.token` on every call (survives token
