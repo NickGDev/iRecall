@@ -1,6 +1,6 @@
 # Release build: everything heavy lives as release assets, never in git.
 # - build job: compiles the server and bundles it with prod node_modules
-#   (native deps are platform-specific — runs on macos-14 arm64) and zips the
+#   (native deps are platform-specific — runs on macos-15 arm64) and zips the
 #   extension unpacked. Attaches artifacts + SHA256SUMS to the tag's release.
 # - model bundles are built by .github/workflows/models.yml (manual dispatch):
 #   the tag-triggered heavy-download job was auto-cancelled by GitHub's abuse
@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
