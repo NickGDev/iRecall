@@ -45,6 +45,8 @@ chmod +x "$APP_DST/Contents/MacOS/Recall"
 
 echo "-- LaunchAgent (auto-start + keepalive)"
 mkdir -p "$HOME/Library/LaunchAgents"
+# Compiled ESM (package.json is type:module) — no tsx loader in production.
+(cd "$PROJECT" && npm run build:server) || { echo "server build failed"; exit 1; }
 cat > "$PLIST_DST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -54,15 +56,16 @@ cat > "$PLIST_DST" <<EOF
   <key>ProgramArguments</key>
   <array>
     <string>$NODE_BIN</string>
-    <string>$PROJECT/node_modules/tsx/dist/cli.mjs</string>
-    <string>$PROJECT/server/src/main.ts</string>
+    <string>--max-old-space-size=384</string>
+    <string>$PROJECT/server/dist/main.js</string>
   </array>
   <key>WorkingDirectory</key><string>$PROJECT</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>$PROJECT/server/server.log</string>
   <key>StandardErrPath</key><string>$PROJECT/server/server.log</string>
-  <key>ProcessType</key><string>Background</string>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>Nice</key><integer>10</integer>
   <key>Umask</key><integer>63</integer>
 </dict>
 </plist>

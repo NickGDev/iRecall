@@ -3,11 +3,13 @@ import { Hono } from 'hono';
 import { spawnSync } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Context, Next } from 'hono';
 import { createStore, type PageInput } from './store.js';
-import { earlyFilter, setFocusCriteria } from './julia.js';
+import { earlyFilter, setFocusCriteria, warmup as juliaWarmup, maybeUnload as juliaMaybeUnload } from './julia.js';
+import { embedOne } from './embeddings.js';
 
 const PORT = 8787;
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -358,10 +360,12 @@ app.post('/api/rules', async (c) => {
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : 'rule rejected' }, 400);
   }
-  const pruned = await store.sweepFocusRules();
+  // Heavy re-verdict runs on the idle scheduler, not in-request (a full sweep
+  // loads the whole store). No UI reads `pruned` from this response.
+  sweepDue = true;
   refreshCriteria();
   clearFilterStats(); // new criteria — auto-ignore memory starts fresh
-  return c.json({ id, pruned });
+  return c.json({ id, pruned: null });
 });
 
 app.patch('/api/rules/:id', async (c) => {
@@ -371,10 +375,10 @@ app.patch('/api/rules/:id', async (c) => {
   if (!body || typeof body.enabled !== 'boolean') return c.json({ error: 'enabled: boolean' }, 400);
   const changed = store.setRuleEnabled(id, body.enabled);
   if (!changed) return c.json({ error: 'not found' }, 404);
-  const pruned = body.enabled ? await store.sweepFocusRules() : 0;
+  if (body.enabled) sweepDue = true;
   refreshCriteria();
   clearFilterStats();
-  return c.json({ enabled: body.enabled, pruned });
+  return c.json({ enabled: body.enabled, pruned: null });
 });
 
 app.delete('/api/rules/:id', (c) => {
@@ -581,21 +585,95 @@ app.post('/api/extension/reinstall', (c) => {
   });
 });
 
-// --- hourly: retention purge + focus sweep + embedding self-heal -------------------
+// --- idle-aware background worker -------------------------------------------------
+// All heavy work (model warm-up, embedding drain, focus sweep, retention purge)
+// runs in bounded slices only while the machine is quiet: one 30s tick, gated
+// on loadavg. Browsing time stays flat; backlog drains when the user walks
+// away. Starvation risk (never idle) degrades to keyword-only search — FTS is
+// written at ingest and un-drained pages are never pruned, so nothing is lost.
+const IDLE_LOAD = Math.max(1, os.cpus().length / 2);
+const SWEEP_EVERY_MS = 6 * 60 * 60 * 1000;
+const PURGE_EVERY_MS = 60 * 60 * 1000;
+const BREAKER_TRIP = 3; // consecutive failed slices → suspend
+const BREAKER_COOLDOWN_MS = 10 * 60 * 1000;
+
+let sweepDue = false; // rule changes jump the queue past the 6h sweep timer
+let failStreak = 0;
+let suspendUntil = 0;
+let lastSweepAt = 0;
+let lastPurgeAt = 0;
+let warmed = false;
+
+async function idleDrain(): Promise<void> {
+  // Slice loop: stop on empty queue, no-progress slice, or machine got busy.
+  // setImmediate yields keep /ingest responsive between slices.
+  for (let i = 0; i < 64; i++) {
+    if (os.loadavg()[0] >= IDLE_LOAD) return;
+    if ((await store.drainBatch(8)) === 0) return;
+    await new Promise((r) => setImmediate(r));
+  }
+}
 
 setInterval(() => {
-  const purged = store.purgeExpired();
-  if (purged > 0) console.log(`retention purge: ${purged} pages removed`);
-  void store.sweepFocusRules().then((pruned) => {
-    if (pruned > 0) console.log(`focus sweep: ${pruned} pages pruned`);
-  });
-  void store.backfillEmbeddings().then((n) => {
-    if (n > 0) console.log(`embedding backfill: ${n} pages queued`);
-  });
-}, 60 * 60 * 1000).unref();
+  void (async () => {
+    const now = Date.now();
+    if (now < suspendUntil) return;
+    if (os.loadavg()[0] >= IDLE_LOAD) return;
+    if (!warmed) {
+      // Load both models outside the request path so the first flush after
+      // boot never pays a model load inside /ingest.
+      warmed = true;
+      try {
+        await Promise.all([juliaWarmup(), embedOne('recall warm-up')]);
+        console.log('models warmed');
+      } catch (err) {
+        console.error('model warm-up failed (stays lazy):', err instanceof Error ? err.message : err);
+      }
+      return;
+    }
+    try {
+      if (sweepDue) {
+        const pruned = await store.sweepFocusRules();
+        sweepDue = false;
+        lastSweepAt = now;
+        if (pruned > 0) console.log(`focus sweep: ${pruned} pages pruned`);
+        return;
+      }
+      const before = store.pendingEmbeds();
+      if (before > 0) {
+        await idleDrain();
+        const after = store.pendingEmbeds();
+        if (after < before) console.log(`embed drain: ${before - after} of ${before} analyzed`);
+        failStreak = 0;
+        return;
+      }
+      // Bursty browsing: when captures stop, free the julia session. Next
+      // ingest lazy-reloads (~2s) or the warm-up tick beats it there.
+      await juliaMaybeUnload(45 * 60_000);
+      if (now - lastSweepAt >= SWEEP_EVERY_MS) {
+        const pruned = await store.sweepFocusRules();
+        lastSweepAt = now;
+        if (pruned > 0) console.log(`focus sweep: ${pruned} pages pruned`);
+        return;
+      }
+      if (now - lastPurgeAt >= PURGE_EVERY_MS) {
+        lastPurgeAt = now;
+        const purged = store.purgeExpired();
+        if (purged > 0) console.log(`retention purge: ${purged} pages removed`);
+      }
+    } catch (err) {
+      failStreak++;
+      console.error(`background slice failed (${failStreak}):`, err instanceof Error ? err.message : err);
+      if (failStreak >= BREAKER_TRIP) {
+        suspendUntil = Date.now() + BREAKER_COOLDOWN_MS;
+        failStreak = 0;
+        console.error(`drain suspended 10min (circuit breaker)`);
+      }
+    }
+  })();
+}, 30_000).unref();
 
 mkdirSync(path.dirname(DB_PATH), { recursive: true });
-void store.backfillEmbeddings();
 
 const server = serve({ fetch: app.fetch, port: PORT, hostname: '127.0.0.1' }, (info) => {
   console.log(`recall server on http://127.0.0.1:${info.port} (db: ${DB_PATH})`);

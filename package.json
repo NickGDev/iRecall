@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch server/src/main.ts",
+    "build:server": "tsc -p server/tsconfig.json",
     "selfcheck": "tsx server/src/selfcheck.ts",
     "mcp": "tsx mcp/src/main.ts",
     "build:ext": "node extension/build.mjs",

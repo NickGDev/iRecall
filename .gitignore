@@ -10,3 +10,4 @@ server/models/
 .codegraph/
 .hallmark/
 .DS_Store
+server/dist/

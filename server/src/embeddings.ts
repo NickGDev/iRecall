@@ -32,7 +32,12 @@ let loading: Promise<void> | null = null;
 
 async function loadModel(): Promise<void> {
   tokenizer = (await AutoTokenizer.from_pretrained(MODEL_ID)) as unknown as typeof tokenizer;
-  model = (await AutoModel.from_pretrained(MODEL_ID, { dtype: 'fp32' })) as unknown as EmbeddedModel;
+  // q8 (model_quantized.onnx): parity 0.999+ vs fp32, cross-text similarity
+  // drift ≤0.006, ~half the load RSS (scripts/granite-ab.ts, 2026-11-25).
+  // fp32 rollback: EMBED_DTYPE=fp32.
+  model = (await AutoModel.from_pretrained(MODEL_ID, {
+    dtype: (process.env.EMBED_DTYPE as 'q8' | 'fp32') ?? 'q8',
+  })) as unknown as EmbeddedModel;
 }
 
 async function getModel(): Promise<{ tokenizer: NonNullable<typeof tokenizer>; model: EmbeddedModel }> {

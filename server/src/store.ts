@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS pages (
 );
 CREATE INDEX IF NOT EXISTS idx_pages_domain ON pages(domain);
 CREATE INDEX IF NOT EXISTS idx_pages_captured_at ON pages(captured_at);
+CREATE INDEX IF NOT EXISTS idx_pages_url_hash ON pages(url, content_hash);
 CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
   title, content, content='pages', content_rowid='id'
 );
@@ -257,10 +258,7 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
           sha256(`${page.url}|${contentHash}|${day}`)
         );
         if (res.changes === 0) skipped++;
-        else {
-          inserted++;
-          queueEmbedding(Number(res.lastInsertRowid), page.content, page.title, page.domain);
-        }
+        else inserted++;
       }
     })(inputs);
     return { inserted, skipped };
@@ -306,79 +304,95 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
   // --- vector index -----------------------------------------------------------
 
   const insertVec = db.prepare('INSERT OR REPLACE INTO page_vectors(page_id, embedding) VALUES (?, ?)');
-  const MAX_PENDING_EMBEDS = 5000;
-  const pendingEmbed: { id: number; content: string; title: string | null; domain: string; attempts: number }[] = [];
-  let draining = false;
-  let drainPromise: Promise<void> = Promise.resolve();
 
   function toBlob(vec: Float32Array): Buffer {
     return Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
   }
 
-  function queueEmbedding(id: number, content: string, title: string | null, domain: string): void {
-    // Bounded: on overflow drop oldest — backfillEmbeddings re-queues rows
-    // still missing from page_vectors, so nothing is lost permanently.
-    if (pendingEmbed.length >= MAX_PENDING_EMBEDS) pendingEmbed.shift();
-    pendingEmbed.push({ id, content, title, domain, attempts: 0 });
-    void drainEmbeddings();
+  // The DB is the embed queue: a page without a page_vectors row is pending.
+  // No RAM copy of page content (the old in-memory queue duplicated up to
+  // 5000 pages), nothing is dropped on overflow, and the queue survives
+  // restarts. Nothing drains it eagerly — the idle scheduler in main.ts calls
+  // drainBatch in bounded slices; selfcheck/tests force it via flushEmbeddings.
+  // "Undecided = keep" makes an un-drained page safe: keyword-searchable via
+  // FTS, never pruned.
+  const EMBED_BATCH = 8;
+  const backfillStmt = db.prepare(
+    'SELECT id, content, title, domain FROM pages WHERE id NOT IN (SELECT page_id FROM page_vectors) ORDER BY id LIMIT ?'
+  );
+  const pendingCountStmt = db.prepare(
+    'SELECT COUNT(*) AS n FROM pages WHERE id NOT IN (SELECT page_id FROM page_vectors)'
+  );
+  const attempts = new Map<number, number>(); // page id → failed drain attempts
+  const poisoned = new Set<number>(); // 3x failed embeds: skipped until restart
+
+  interface PendingRow {
+    id: number;
+    content: string;
+    title: string | null;
+    domain: string;
   }
 
-  function drainEmbeddings(): Promise<void> {
-    if (!draining) {
-      draining = true;
-      drainPromise = (async () => {
-        try {
-          while (pendingEmbed.length > 0) {
-            const job = pendingEmbed[0]!;
-            try {
-              const vec = await embedText(job.content);
-              // Focus gate: with the vector in hand the semantic rule gets its
-              // real verdict. Reject = delete the page before it ever joins the
-              // search index.
-              const verdict = focusVerdict(job.title, job.domain, job.content, vec);
-              if (!verdict.keep) {
-                deleteById.run(job.id);
-                focusPrunedCount += verdict.pruned;
-                pendingEmbed.shift();
-                continue;
-              }
-              insertVec.run(job.id, toBlob(vec));
-              pendingEmbed.shift();
-            } catch (err) {
-              job.attempts++;
-              if (job.attempts >= 3) {
-                pendingEmbed.shift();
-                console.error(
-                  `embed failed 3x, dropping (page ${job.id}):`,
-                  err instanceof Error ? err.message : err
-                );
-              } else {
-                // Transient (model load/download): move job to the end, stop
-                // draining. Next ingest or hourly backfill retriggers the drain.
-                pendingEmbed.push(job);
-                pendingEmbed.shift();
-                break;
-              }
-            }
-          }
-        } finally {
-          draining = false;
-        }
-      })();
-    }
-    // Await the real in-flight drain even when this call was the no-op guard.
-    return drainPromise;
-  }
-
-  async function backfillEmbeddings(): Promise<number> {
-    const rows = db
+  function selectPending(n: number): PendingRow[] {
+    if (poisoned.size === 0) return backfillStmt.all(n) as PendingRow[];
+    const ids = [...poisoned].join(','); // numbers only — safe to interpolate
+    return db
       .prepare(
-        'SELECT id, content, title, domain FROM pages WHERE id NOT IN (SELECT page_id FROM page_vectors) LIMIT 500'
+        `SELECT id, content, title, domain FROM pages
+         WHERE id NOT IN (SELECT page_id FROM page_vectors) AND id NOT IN (${ids})
+         ORDER BY id LIMIT ?`
       )
-      .all() as { id: number; content: string; title: string | null; domain: string }[];
-    for (const row of rows) queueEmbedding(row.id, row.content, row.title, row.domain);
-    return rows.length;
+      .all(n) as PendingRow[];
   }
+
+  // One bounded drain slice: embed up to n pending pages, give each the full
+  // verdict (exemplars + rules), keep-with-vector or prune. Embed failures
+  // increment the per-page attempt count and stay queued — the scheduler's
+  // circuit breaker decides when to retry; 3 failures marks the page poisoned.
+  async function drainBatch(n: number): Promise<number> {
+    const rows = selectPending(n);
+    let done = 0;
+    for (const row of rows) {
+      let vec: Float32Array;
+      try {
+        vec = await embedText(row.content);
+      } catch (err) {
+        const tries = (attempts.get(row.id) ?? 0) + 1;
+        attempts.set(row.id, tries);
+        if (tries >= 3) {
+          poisoned.add(row.id);
+          attempts.delete(row.id);
+          console.error(
+            `embed failed 3x, skipping (page ${row.id}):`,
+            err instanceof Error ? err.message : err
+          );
+        }
+        continue;
+      }
+      attempts.delete(row.id);
+      // Focus gate: with the vector in hand the semantic rule gets its
+      // real verdict. Reject = delete the page before it ever joins the
+      // search index.
+      const verdict = focusVerdict(row.title, row.domain, row.content, vec);
+      if (!verdict.keep) {
+        deleteById.run(row.id);
+        focusPrunedCount += verdict.pruned;
+      } else {
+        insertVec.run(row.id, toBlob(vec));
+      }
+      poisoned.delete(row.id);
+      done++;
+    }
+    return done;
+  }
+
+  // Drain until empty — selfcheck + manual force-drain. Stops when a slice
+  // makes no progress (retries exhausted / poisoned rows excluded).
+  async function flushEmbeddings(): Promise<void> {
+    while ((await drainBatch(EMBED_BATCH)) > 0) {}
+  }
+
+  const pendingEmbeds = (): number => (pendingCountStmt.get() as { n: number }).n;
 
   function searchVec(vec: Float32Array, limit: number): { pageId: number; distance: number }[] {
     // Inline (clamped) LIMIT: better-sqlite3 can't bind LIMIT ? together with
@@ -1005,8 +1019,9 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
     purgeExpired,
     getSetting,
     setSetting,
-    backfillEmbeddings,
-    flushEmbeddings: drainEmbeddings,
+    drainBatch,
+    flushEmbeddings,
+    pendingEmbeds,
     setFocusRule,
     listFocusRules,
     setRuleEnabled,

@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-const MODEL_DIR = path.join(here, '..', 'models', process.env.JULIA_MODEL_DIR ?? 'julia-1.5');
+const MODEL_DIR = path.join(here, '..', 'models', process.env.JULIA_MODEL_DIR ?? 'julia-1.5-fp16');
 const MAX_LENGTH = 1024;
 const HEAD_LENGTH = Number(process.env.JULIA_HEAD_LENGTH) || 512; // Julia-1.5 contract (Julia-1 used 256)
 const CHUNK = 16;
@@ -37,6 +37,8 @@ let encoder: WasmEncoderLike | null = null;
 let loading: Promise<boolean> | null = null; // resolves true = model ready
 let warned = false;
 let options: string[] | null = null; // [keep, drop], rebuilt from focus topics
+let lastUse = 0; // epoch ms of last inference — drives idle unload
+let inFlight = 0; // runs between await points; unload skips while > 0
 
 async function load(): Promise<boolean> {
   const graph = path.join(MODEL_DIR, 'model.onnx');
@@ -61,6 +63,14 @@ async function load(): Promise<boolean> {
   // resolves it automatically; passing it via the option double-buffers 550MB.
   session = await ort.InferenceSession.create(graph, {
     graphOptimizationLevel: 'all',
+    // Cap ORT at 2 intra-op threads: unbounded, every inference grabbed all
+    // physical cores (full-core burst per ingest). 2 threads ≈ slightly slower
+    // per page, machine stays usable. granite (transformers.js) has no knob.
+    intraOpNumThreads: 2,
+    interOpNumThreads: 1,
+    // External-data weights are mmap'd (file-backed, OS-purgeable); the CPU
+    // memory arena would copy them into anonymous RAM instead.
+    enableCpuMemArena: false,
   });
   // warm
   await logits([{ state: '', question: 'Ready?', options: ['Yes', 'No'] }]);
@@ -80,8 +90,44 @@ function ready(): Promise<boolean> {
   return loading;
 }
 
+/** Pre-load the session outside any request path (idle scheduler warm-up). */
+export function warmup(): Promise<boolean> {
+  return ready();
+}
+
+/** Release the 200-360MB mmap-backed session after an idle gap. Session is
+ *  bursty (ingest storms while browsing, then nothing); the next ingest pays
+ *  a ~2s lazy reload, or the scheduler's warm-up catches it first. No-op
+ *  while a run is in flight. Returns true when it actually released. */
+export async function maybeUnload(maxIdleMs: number): Promise<boolean> {
+  if (!session || inFlight > 0) return false;
+  if (Date.now() - lastUse < maxIdleMs) return false;
+  const s = session;
+  session = null;
+  loading = null;
+  lastUse = 0;
+  try {
+    await s.release();
+    console.log(`julia released (idle > ${Math.round(maxIdleMs / 60000)}min)`);
+    return true;
+  } catch (err) {
+    console.error('julia release failed:', err instanceof Error ? err.message : err);
+    return false;
+  }
+}
+
 async function logits(rows: { state: string; question: string; options: string[] }[]): Promise<number[][]> {
   if (!session || !encoder) throw new Error('julia session not loaded');
+  inFlight++;
+  try {
+    return await rawLogits(rows);
+  } finally {
+    inFlight--;
+    lastUse = Date.now();
+  }
+}
+
+async function rawLogits(rows: { state: string; question: string; options: string[] }[]): Promise<number[][]> {
   const items = rows.map((row) => JSON.parse(encoder!.encode(JSON.stringify(row), MAX_LENGTH, HEAD_LENGTH, false))) as {
     ids: number[];
     markers: number[];
@@ -106,7 +152,7 @@ async function logits(rows: { state: string; question: string; options: string[]
     });
     qtype[i] = BigInt(item.qtype);
   });
-  const output = await session.run({
+  const output = await session!.run({
     input_ids: new ort.Tensor('int64', ids, [batch, length]),
     attention_mask: new ort.Tensor('int64', attention, [batch, length]),
     marker_pos: new ort.Tensor('int64', positions, [batch, count]),
