@@ -11,3 +11,5 @@ server/models/
 .hallmark/
 .DS_Store
 server/dist/
+server/public/recall.crx
+server/public/updates.xml

@@ -133,3 +133,21 @@ staleness flags; `get_page(id)` — full page text (truncated at 20k chars);
    time-window wipes
 6. Enrichment worker (summaries, tags, sensitive classify — idle-time, async);
    PDF path (byte extraction, OCR fallback for scans) — no continuous OCR ever.
+
+## Releases
+
+Artifacts never live in git (`server/models/`, built CRX, compiled dist are all
+ignored). Pushing a `v*` tag runs the release workflow:
+
+- **models** — rebuilds julia-1.5-fp16 from the public SupersonicLabs
+  safetensors (parity-gated via `PARITY PASS`) and bundles it with granite q8
+  from HF → `recall-models.tar.gz`
+- **build** — macos-14 arm64: compiled server dist + prod `node_modules` +
+  unpacked extension zip. CI never signs the CRX; run `npm run pack:ext`
+  locally (generates `keys/recall-key.pem` on first use) for the pinned-ID CRX.
+- **release** — attaches artifacts + SHA256SUMS to the GitHub release.
+
+Fresh machine: clone, then `scripts/install-mac.sh` — it compiles, fetches
+models from the latest release (or HF for granite) via
+`scripts/fetch-models.sh`, and installs the LaunchAgent. No keys are stored in
+the repo or CI; the CRX key is generated on the user's machine.

@@ -47,6 +47,10 @@ echo "-- LaunchAgent (auto-start + keepalive)"
 mkdir -p "$HOME/Library/LaunchAgents"
 # Compiled ESM (package.json is type:module) — no tsx loader in production.
 (cd "$PROJECT" && npm run build:server) || { echo "server build failed"; exit 1; }
+# Models are release artifacts, not repo files — fetch if missing.
+if [ ! -f "$PROJECT/server/models/julia-1.5-fp16/model.onnx" ]; then
+  "$PROJECT/scripts/fetch-models.sh"
+fi
 cat > "$PLIST_DST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
