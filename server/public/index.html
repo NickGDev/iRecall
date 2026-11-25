@@ -240,6 +240,8 @@
       }
       .chip.stale { background: var(--color-accent-soft); color: var(--color-accent); }
       .chip.ignored { background: var(--color-cool-soft); color: var(--color-cool); }
+      button.chip.example { cursor: pointer; background: var(--color-cool-soft); color: var(--color-ink); }
+      button.chip.example:hover { background: var(--color-accent-soft); }
       .trail-actions { display: flex; gap: var(--space-2xs); align-items: center; }
       .mini {
         font: 500 12px var(--font-body);
@@ -414,6 +416,11 @@
           </div>
           <div class="field">
             <label class="label" for="f-topics">Topics, one description per line, written like search queries for pages worth keeping</label>
+            <div class="row" id="rule-examples" style="gap: 8px; flex-wrap: wrap; margin-top: 6px">
+              <button type="button" class="chip example" data-example="baking">I'm interested in baking</button>
+              <button type="button" class="chip example" data-example="rna">Biological research on RNA</button>
+              <button type="button" class="chip example" data-example="software">Software engineering &amp; AI agents</button>
+            </div>
             <textarea id="f-topics"></textarea>
           </div>
           <div class="field">
@@ -871,6 +878,47 @@
         $('threshold-val').textContent = Number($('f-threshold').value).toFixed(2);
         if (rule) $('f-domain').focus();
       }
+      // Example presets: click fills the form (domain + threshold untouched).
+      // "software" mirrors the owner's own focus rule verbatim.
+      const RULE_EXAMPLES = {
+        baking: {
+          topics: [
+            'bread and sourdough baking techniques and starters',
+            'cake, cookie and pastry recipes and decorating',
+            'baking science: gluten, fermentation, ovens and ingredients',
+          ],
+          keywords: 'baking, bread, sourdough, pastry',
+        },
+        rna: {
+          topics: [
+            'RNA biology: transcription, splicing and non-coding RNA',
+            'mRNA vaccines and RNA therapeutics research',
+            'ribosome function, translation and protein synthesis',
+          ],
+          keywords: 'RNA, mRNA, ribosome, splicing, ncRNA',
+        },
+        software: {
+          topics: [
+            'software engineering and programming',
+            'LLMs, large language models, prompting and AI agents',
+            'self-hosting and homelab infrastructure',
+            'MCP servers and agent tooling',
+            'agent harnesses and agentic workflows',
+            'vector databases and embeddings',
+            'RAG and retrieval-augmented generation',
+          ],
+          keywords: 'llm, rag, mcp, vector db, sqlite-vec, self-host, homelab, agent harness',
+        },
+      };
+      document.querySelectorAll('#rule-examples .chip.example').forEach((btn) =>
+        btn.addEventListener('click', () => {
+          const ex = RULE_EXAMPLES[btn.dataset.example];
+          if (!ex) return;
+          $('f-topics').value = ex.topics.join('\n');
+          $('f-keywords').value = ex.keywords;
+          $('f-topics').focus();
+        })
+      );
       function renderPreview(res) {
         const box = $('preview-result');
         box.textContent = '';

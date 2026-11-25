@@ -43,7 +43,9 @@ jobs:
         run: |
           cd scripts/julia15-export
           uv venv
-          uv pip install torch onnx onnxruntime onnxscript transformers tokenizers
+          # CPU-only torch: the default wheel pulls ~3GB of CUDA deps useless on runners
+          uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+          uv pip install onnx onnxruntime onnxscript transformers tokenizers
           uv run python padded_model.py
           uv run python export_and_check.py | tee /tmp/export.log
           grep -q 'PARITY PASS' /tmp/export.log || { echo 'parity gate failed'; exit 1; }

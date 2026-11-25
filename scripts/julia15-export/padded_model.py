@@ -170,7 +170,7 @@ class PaddedJulia(torch.nn.Module):
 
 def main():
     root = CHECKPOINT
-    model = PaddedJuliaV2(root).eval()
+    model = PaddedJulia(root).eval()
     sys.path.insert(0, str(root / 'runtime'))
     from julia15.encoding import Encoder
     from tokenizers import Tokenizer
