@@ -97,7 +97,7 @@ const ICONS: Record<'base' | 'err' | 'stop', { [size: number]: string }> = {
   },
 };
 
-type TabStatus = 'saved' | 'blocked' | 'password' | 'thin';
+type TabStatus = 'saved' | 'blocked' | 'password' | 'thin' | 'filtered';
 
 interface TabEntry {
   status: TabStatus;
@@ -167,6 +167,9 @@ async function clearTabEntry(tabId: number): Promise<void> {
 interface BufferItem {
   seq: number;
   page: CaptureMsg['page'];
+  // Which tab produced the capture — lets the flush verdict (filtered) land
+  // back on the right tab's popup state. Optional: legacy buffers lack it.
+  tabId?: number;
 }
 
 // chrome.storage.session quota is ~10MB; 50 pages with a 2MB worst case each
@@ -191,15 +194,15 @@ function asItems(raw: unknown): BufferItem[] {
 // get→set window and silently lose one. Single FIFO, never poisoned.
 let enqueueChain: Promise<void> = Promise.resolve();
 
-function enqueue(page: CaptureMsg['page']): void {
-  enqueueChain = enqueueChain.then(() => reallyEnqueue(page)).catch(() => {});
+function enqueue(page: CaptureMsg['page'], tabId?: number): void {
+  enqueueChain = enqueueChain.then(() => reallyEnqueue(page, tabId)).catch(() => {});
 }
 
-async function reallyEnqueue(page: CaptureMsg['page']): Promise<void> {
+async function reallyEnqueue(page: CaptureMsg['page'], tabId?: number): Promise<void> {
   const { buffer } = (await chrome.storage.session.get('buffer')) as { buffer?: unknown };
   const items = asItems(buffer);
   const seq = (items.length > 0 ? items[items.length - 1]!.seq : 0) + 1;
-  let next: BufferItem[] = [...items, { seq, page }];
+  let next: BufferItem[] = [...items, { seq, page, tabId }];
   if (next.length > MAX_BUFFER) {
     const droppedCount = next.length - MAX_BUFFER;
     next = next.slice(droppedCount);
@@ -295,7 +298,7 @@ async function doFlush(): Promise<void> {
       inserted?: number;
       skipped?: number;
       filtered?: number;
-      filteredPages?: { domain: string }[];
+      filteredPages?: { url?: string; domain: string }[];
       dropped?: number;
     };
     const parts: string[] = [`${out.inserted ?? 0} saved`];
@@ -305,6 +308,12 @@ async function doFlush(): Promise<void> {
     void log('sync', parts.join(', '));
     for (const fp of (out.filteredPages ?? []).slice(0, 5)) {
       void log('skip', `off-focus: ${fp.domain}`);
+      // Land the verdict on the tab that produced the page, so the popup says
+      // "kept out by the focus filter" instead of a generic "not captured".
+      const sent = buffer.find((b) => b.page.url === fp.url);
+      if (sent?.tabId != null) {
+        void setTabEntry(sent.tabId, 'filtered', 'Recall: focus filter kept this out');
+      }
     }
     const lastSeq = buffer[buffer.length - 1]!.seq;
     const { buffer: now } = (await chrome.storage.session.get('buffer')) as { buffer?: unknown };
@@ -391,7 +400,7 @@ chrome.runtime.onMessage.addListener((msg: CaptureMsg | StateMsg, sender) => {
         if (states[tabId]?.status === 'saved') await clearTabEntry(tabId);
       })();
     }
-    enqueue(msg.page);
+    enqueue(msg.page, tabId);
   } else if (msg.type === 'state' && 'state' in msg && msg.state === 'skipped' && sender.tab?.id != null) {
     const tabId = sender.tab.id;
     const label =

@@ -166,6 +166,31 @@ assert(kwStore.keywordHit('a.com', null, 'building a rag pipeline over sqlite') 
 assert(kwStore.keywordHit('a.com', null, 'storage systems and averages') === false, 'keyword gate rejects mid-word substring');
 kwStore.close();
 
+// exemplars: teaching a page keeps similar pages in the verdict; forgetting
+// removes the signal — the learn/unteach loop the popup + MCP teach feed.
+const exStore = createStore(':memory:', fakeEmbed);
+await exStore.setFocusRule({ topics: ['llm machine learning models'], keywords: [], threshold: 0.55 });
+const taught = await exStore.addExemplar({
+  url: 'https://huggingface.co/collections/gemma',
+  title: 'gemma-4-MNN - a Collection',
+  content: 'gemma mnn quantized text generation models collection. ',
+});
+assert(taught.hasVector, 'exemplar embedded at teach time');
+const kept = await exStore.focusCheck(
+  'collection page',
+  'huggingface.co',
+  'gemma mnn quantized text generation models collection list'
+);
+assert(kept === true, 'exemplar similarity keeps a similar page');
+assert(exStore.deleteExemplar(taught.id) === 1, 'exemplar delete works');
+const keptAfterForget = await exStore.focusCheck(
+  'collection page',
+  'huggingface.co',
+  'gemma mnn quantized text generation models collection list'
+);
+assert(keptAfterForget === false, 'after forget the same page is pruned again');
+exStore.close();
+
 store2.close();
 
 store.close();

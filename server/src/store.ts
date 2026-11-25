@@ -87,6 +87,18 @@ CREATE TABLE IF NOT EXISTS focus_rules (
   topic_vecs BLOB,
   n_topics INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS exemplars (
+  id INTEGER PRIMARY KEY,
+  url TEXT NOT NULL,
+  domain TEXT NOT NULL,
+  title TEXT,
+  content TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS exemplar_vectors (
+  exemplar_id INTEGER PRIMARY KEY REFERENCES exemplars(id) ON DELETE CASCADE,
+  embedding BLOB NOT NULL
+);
 `;
 
 // A focus rule tells recall what to remember: pages in scope (domain, or
@@ -106,6 +118,27 @@ export interface FocusRule {
 }
 
 const MAX_CONTENT_BYTES = 2_000_000;
+
+// An exemplar is a page the user explicitly taught ("I care about this kind of
+// page"). Its embedding becomes a positive signal: any future page close to it
+// survives the focus verdict, regardless of rule scope — teaching says "this
+// kind of page", not "this domain".
+export interface Exemplar {
+  id: number;
+  url: string;
+  domain: string;
+  title: string | null;
+  createdAt: number;
+  hasVector: boolean;
+}
+
+// Page↔page cosine on granite runs high: unrelated pages baseline 0.72–0.75,
+// the taught page's own family sits ≥0.88 (measured 2026-11-25 across the
+// live store). 0.85 = "very close to a taught page"; anything looser and the
+// exemplar leg keeps near-everything. Rule topics use their own, much lower
+// scale — do not share thresholds across the two. ponytail: fixed constant;
+// upgrade = per-exemplar weight if teaching precision ever needs it.
+const EXEMPLAR_THRESHOLD = 0.85;
 
 function sha256(s: string): string {
   return createHash('sha256').update(s).digest('hex');
@@ -603,6 +636,70 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
   const updateFocusEnabled = db.prepare('UPDATE focus_rules SET enabled = ? WHERE id = ?');
   const deleteFocusRuleStmt = db.prepare('DELETE FROM focus_rules WHERE id = ?');
 
+  // --- exemplars: user-taught pages (see Exemplar) ------------------------------
+  const insertExemplar = db.prepare(
+    'INSERT INTO exemplars (url, domain, title, content, created_at) VALUES (?, ?, ?, ?, ?)'
+  );
+  const insertExemplarVec = db.prepare('INSERT INTO exemplar_vectors (exemplar_id, embedding) VALUES (?, ?)');
+  const exemplarVecRows = db.prepare(
+    'SELECT v.embedding FROM exemplars e JOIN exemplar_vectors v ON v.exemplar_id = e.id ORDER BY e.id'
+  );
+  const exemplarHasVec = db.prepare('SELECT 1 AS x FROM exemplar_vectors WHERE exemplar_id = ?');
+  const listExemplarsStmt = db.prepare(
+    'SELECT id, url, domain, title, created_at AS createdAt FROM exemplars ORDER BY id DESC'
+  );
+  const deleteExemplarStmt = db.prepare('DELETE FROM exemplars WHERE id = ?');
+
+  // In-memory positive-signal vectors; rebuilt on teach/unteach + startup.
+  let exemplarVecs: Float32Array[] = [];
+  function reloadExemplars(): void {
+    exemplarVecs = (exemplarVecRows.all() as { embedding: Buffer }[]).map((r) =>
+      new Float32Array(r.embedding.buffer.slice(r.embedding.byteOffset, r.embedding.byteOffset + r.embedding.byteLength))
+    );
+  }
+  reloadExemplars();
+
+  // Teach: embed first, then store row + vector — if the model is down nothing
+  // is written and the caller retries, so an exemplar never silently has no
+  // vector at teach time.
+  async function addExemplar(input: { url?: unknown; title?: unknown; content?: unknown }): Promise<Exemplar> {
+    if (typeof input.url !== 'string' || typeof input.content !== 'string' || input.content.length === 0) {
+      throw new Error('url and content required');
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(input.url);
+    } catch {
+      throw new Error('invalid url');
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('invalid url');
+    if (Buffer.byteLength(input.content) > MAX_CONTENT_BYTES) throw new Error('content too large');
+    const title = typeof input.title === 'string' && input.title.length > 0 ? input.title.slice(0, 512) : null;
+    const domain = parsed.hostname;
+    const vec = await embedText(input.content);
+    const createdAt = Date.now();
+    const id = db.transaction(() => {
+      const res = insertExemplar.run(input.url, domain, title, input.content, createdAt);
+      insertExemplarVec.run(Number(res.lastInsertRowid), toBlob(vec));
+      return Number(res.lastInsertRowid);
+    })();
+    reloadExemplars();
+    return { id, url: input.url, domain, title, createdAt, hasVector: true };
+  }
+
+  function listExemplars(): Exemplar[] {
+    return (
+      listExemplarsStmt.all() as { id: number; url: string; domain: string; title: string | null; createdAt: number }[]
+    ).map((r) => ({ ...r, hasVector: !!exemplarHasVec.get(r.id) }));
+  }
+
+  function deleteExemplar(id: number): number {
+    // exemplar_vectors cascade with the row; drop the vector from the live gate.
+    const changes = deleteExemplarStmt.run(id).changes;
+    if (changes) reloadExemplars();
+    return changes;
+  }
+
   function parseRule(r: RuleRow) {
     const topics = r.topics.split('\n').map((s) => s.trim()).filter(Boolean);
     const keywords = r.keywords.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
@@ -700,13 +797,23 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
     content: string,
     pageVec: Float32Array | null
   ): { keep: boolean; score: number; pruned: number } {
+    // Exemplar leg first: similarity to any taught page keeps, independent of
+    // rule scope. No page vector or no exemplars = leg abstains.
+    let exemplarKeep = false;
+    let best = -1;
+    if (pageVec) {
+      for (const ev of exemplarVecs) {
+        const s = maxSim(pageVec, [ev]);
+        if (s > best) best = s;
+        if (s >= EXEMPLAR_THRESHOLD) exemplarKeep = true;
+      }
+    }
     const rules = (focusRuleStmt.all() as RuleRow[])
       .map(parseRule)
       .filter((r) => r.enabled && domainInScope(domain, r.domain));
-    if (rules.length === 0) return { keep: true, score: 1, pruned: 0 };
-    let decided = false;
-    let keep = false;
-    let best = -1;
+    if (rules.length === 0) return { keep: true, score: exemplarKeep ? best : 1, pruned: 0 };
+    let decided = exemplarKeep;
+    let keep = exemplarKeep;
     for (const r of rules) {
       if (hasKeyword(title, content, r.keywords)) {
         keep = true;
@@ -720,7 +827,20 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
         if (s >= r.threshold) keep = true;
       }
     }
-    return { keep: !decided ? true : keep, score: best < 0 ? 1 : best, pruned: decided && !keep ? 1 : 0 };
+    return { keep, score: best < 0 ? 1 : best, pruned: decided && !keep ? 1 : 0 };
+  }
+
+  // Rescue check for the ingest path: embed a bounded head and run the full
+  // verdict (exemplars + rules). Head-only keeps ingest latency flat on big
+  // batches; model down = fail-open, matching the drain gate.
+  async function focusCheck(title: string | null, domain: string, content: string): Promise<boolean> {
+    let vec: Float32Array | null = null;
+    try {
+      vec = await embedText(content.slice(0, 2000));
+    } catch {
+      return true;
+    }
+    return focusVerdict(title, domain, content, vec).keep;
   }
 
   async function ensureRuleVecs(rule: ReturnType<typeof parseRule>): Promise<void> {
@@ -890,6 +1010,10 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
     setFocusRule,
     listFocusRules,
     setRuleEnabled,
+    addExemplar,
+    listExemplars,
+    deleteExemplar,
+    focusCheck,
     deleteFocusRule,
     previewFocusRule,
     sweepFocusRules,

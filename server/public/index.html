@@ -438,6 +438,15 @@
           <h2 class="tab-head">Active rules</h2>
           <div class="panel" id="rule-list"></div>
         </div>
+        <div class="section">
+          <h2 class="tab-head">Taught pages</h2>
+          <p class="tab-intro">
+            Pages you taught the filter to keep: pages similar to these survive ingest and the sweep.
+            Teach from any page row ("Teach") or the popup's "Keep pages like this" button on a page that
+            was not captured.
+          </p>
+          <div class="panel trail" id="exemplar-list"></div>
+        </div>
       </section>
 
       <!-- blocked -------------------------------------------------------- -->
@@ -656,6 +665,22 @@
 
       function hitActions(hit, rerender) {
         return [
+          miniBtn('Teach', '', async () => {
+            try {
+              await api('/api/exemplars/from/' + hit.id, { method: 'POST' });
+              showStatus('taught — pages like this will be kept', 'ok');
+            } catch (e) {
+              showStatus(e.message, 'bad');
+            }
+          }),
+          miniBtn('Block site', '', async () => {
+            try {
+              await api('/api/exemplars/from/' + hit.id, { method: 'POST' });
+              showStatus('taught — pages like this will be kept', 'ok');
+            } catch (e) {
+              showStatus(e.message, 'bad');
+            }
+          }),
           miniBtn('Block site', '', async () => {
             try {
               const cur = await api('/api/blocked');
@@ -937,6 +962,42 @@
         }
         data.rules.forEach((r) => box.appendChild(renderRule(r)));
       }
+      async function renderExemplars() {
+        let data;
+        try {
+          data = await api('/api/exemplars');
+        } catch {
+          failInto($('exemplar-list'), 'could not load taught pages. check that recall is running.');
+          return;
+        }
+        const box = $('exemplar-list');
+        box.textContent = '';
+        if (!data.exemplars.length) {
+          emptyBox(box, [
+            el('span', '', 'nothing taught yet. '),
+            el('span', '', 'Use "Teach" on any page row, or the popup button on a page that was not captured.'),
+          ]);
+          return;
+        }
+        for (const ex of data.exemplars) {
+          box.appendChild(
+            trailRow({
+              time: new Date(ex.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' }),
+              href: ex.url,
+              title: ex.title || ex.url,
+              meta: [{ text: ex.domain, cls: 'dom' }],
+              actions: [
+                miniBtn('Forget', 'danger', async () => {
+                  if (!confirmDelete('this taught page (' + (ex.title || ex.domain) + ')')) return;
+                  await api('/api/exemplars/' + ex.id, { method: 'DELETE' });
+                  showStatus('exemplar removed', 'ok');
+                  renderExemplars().catch(() => {});
+                }),
+              ],
+            })
+          );
+        }
+      }
 
       $('f-threshold').oninput = (e) => {
         $('threshold-val').textContent = Number(e.target.value).toFixed(2);
@@ -1163,7 +1224,10 @@
             await renderCards();
             await renderRecent(false);
           }
-          if (tab === 'focus') await renderRules();
+          if (tab === 'focus') {
+            await renderRules();
+            await renderExemplars();
+          }
           if (tab === 'blocked') {
             await renderBlocked();
             await renderAuto();

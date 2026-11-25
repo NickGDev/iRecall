@@ -38,6 +38,35 @@ function hostMatches(host: string, list: string[]): boolean {
 let navTimer: ReturnType<typeof setTimeout> | undefined;
 let viewStart = performance.now();
 
+interface ExtractedPage {
+  url: string;
+  title: string | null;
+  content: string;
+  excerpt: string | null;
+  byline: string | null;
+  dwellMs: number;
+  capturedAt: number;
+}
+
+function extractPage(): ExtractedPage | null {
+  // Readability on a fresh clone of the live DOM (isolated world — scripts in
+  // the clone never run). Only article.textContent leaves the page; DOMPurify
+  // was dropped here: it throws on Document input (importNode), and sanitize
+  // added nothing — the server stores plain text and every render sink is
+  // textContent.
+  const article = new Readability(document.cloneNode(true) as Document).parse();
+  if (!article || !article.textContent) return null;
+  return {
+    url: location.href,
+    title: article.title ?? document.title ?? null,
+    content: article.textContent,
+    excerpt: article.excerpt ?? null,
+    byline: article.byline ?? null,
+    dwellMs: Math.round(performance.now() - viewStart),
+    capturedAt: Date.now(),
+  };
+}
+
 async function capture(reason: string): Promise<void> {
   if (!location.protocol.startsWith('http')) return;
   const cfg = await getConfig();
@@ -53,31 +82,14 @@ async function capture(reason: string): Promise<void> {
     await chrome.runtime.sendMessage({ type: 'state', state: 'skipped', host, reason: 'password' });
     return;
   }
-  // Readability on a fresh clone of the live DOM (isolated world — scripts in
-  // the clone never run). Only article.textContent leaves the page; DOMPurify
-  // was dropped here: it throws on Document input (importNode), and sanitize
-  // added nothing — the server stores plain text and every render sink is
-  // textContent.
-  const article = new Readability(document.cloneNode(true) as Document).parse();
-  if (!article || (article.textContent?.length ?? 0) < MIN_CHARS) {
+  const page = extractPage();
+  if (!page || page.content.length < MIN_CHARS) {
     // Tell the worker so the badge + popup can say why nothing was kept.
     await chrome.runtime.sendMessage({ type: 'state', state: 'skipped', host, reason: 'thin' });
     return;
   }
   try {
-    await chrome.runtime.sendMessage({
-      type: 'capture',
-      page: {
-        url: location.href,
-        title: article.title ?? document.title ?? null,
-        content: article.textContent ?? '',
-        excerpt: article.excerpt ?? null,
-        byline: article.byline ?? null,
-        dwellMs: Math.round(performance.now() - viewStart),
-        capturedAt: Date.now(),
-        reason,
-      },
-    });
+    await chrome.runtime.sendMessage({ type: 'capture', page: { ...page, reason } });
   } catch {
     // worker unreachable: nothing buffered here, next page retries
   }
@@ -94,6 +106,14 @@ function scheduleNavCapture(): void {
 document.addEventListener('recall:nav', scheduleNavCapture);
 window.addEventListener('pageshow', (e) => {
   if ((e as PageTransitionEvent).persisted) capture('bfcache');
+});
+
+// Popup "teach this page": re-extract on demand; the popup POSTs the payload
+// as an exemplar. Same extraction as capture but without its gates — explicit
+// user intent outranks the thin/blocked heuristics.
+chrome.runtime.onMessage.addListener((msg: { type?: string }, _sender, sendResponse) => {
+  if (msg?.type !== 'teach') return;
+  sendResponse(extractPage());
 });
 
 capture('load');

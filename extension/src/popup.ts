@@ -25,6 +25,7 @@ const els = {
   pageStatus: document.getElementById('page-status') as HTMLParagraphElement,
   pageHost: document.getElementById('page-host') as HTMLParagraphElement,
   pageNote: document.getElementById('page-note') as HTMLParagraphElement,
+  teachBtn: document.getElementById('teach-btn') as HTMLButtonElement,
   blockBtn: document.getElementById('block-btn') as HTMLButtonElement,
   deleteBtn: document.getElementById('delete-pages-btn') as HTMLButtonElement,
   dashboard: document.getElementById('dashboard-link') as HTMLAnchorElement,
@@ -150,6 +151,9 @@ async function renderPagePanel(token: string | undefined, enabled: boolean): Pro
       status = 'Login page, skipped';
     } else if (st?.status === 'thin') {
       status = 'Too little readable text';
+    } else if (st?.status === 'filtered') {
+      status = 'Off-focus, not stored';
+      note = 'captured, but the focus filter kept it out. Use "Keep pages like this" to teach the filter.';
     } else if (blocked) {
       status = 'Site blocked';
     } else {
@@ -169,6 +173,7 @@ async function renderPagePanel(token: string | undefined, enabled: boolean): Pro
   }
 
   const canManage = host !== null && token !== undefined;
+  els.teachBtn.hidden = !canManage;
   els.blockBtn.hidden = !canManage;
   if (canManage) {
     const list = await blockedList();
@@ -215,6 +220,35 @@ async function putBlockList(domains: string[]): Promise<BlockedDomain[]> {
   await chrome.storage.local.set({ blocked: { domains: out.domains.map((d) => d.domain) } });
   return out.domains;
 }
+
+els.teachBtn.addEventListener('click', () => {
+  void withBtn(els.teachBtn, 'teaching…', async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id == null) return;
+    let page: { url?: unknown; content?: unknown } | null = null;
+    try {
+      page = (await chrome.tabs.sendMessage(tab.id, { type: 'teach' })) as {
+        url?: unknown;
+        content?: unknown;
+      } | null;
+    } catch {
+      // no content script (non-web page or unloaded tab)
+    }
+    if (!page || typeof page.url !== 'string' || typeof page.content !== 'string' || page.content.length === 0) {
+      els.pageNote.textContent = 'could not read this page, nothing taught';
+      els.pageNote.classList.add('warn');
+      return;
+    }
+    try {
+      await api('/api/exemplars', { method: 'POST', body: JSON.stringify(page) });
+      els.pageNote.textContent = 'taught — pages like this will be kept';
+      els.pageNote.classList.remove('warn');
+    } catch {
+      els.pageNote.textContent = 'teach failed, server error';
+      els.pageNote.classList.add('warn');
+    }
+  });
+});
 
 els.blockBtn.addEventListener('click', () => {
   void withBtn(els.blockBtn, 'working…', async () => {

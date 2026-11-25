@@ -43,11 +43,16 @@ interface ApiPage extends Omit<ApiHit, 'snippet' | 'rank' | 'ageDays' | 'superse
   byline: string | null;
 }
 
-async function api(pathAndQuery: string): Promise<unknown> {
+async function api(pathAndQuery: string, opts?: { method?: string; body?: string }): Promise<unknown> {
   let res: Response;
   try {
     res = await fetch(`${SERVER}${pathAndQuery}`, {
-      headers: { authorization: `Bearer ${readToken()}` },
+      method: opts?.method ?? 'GET',
+      headers: {
+        authorization: `Bearer ${readToken()}`,
+        ...(opts?.body ? { 'content-type': 'application/json' } : {}),
+      },
+      body: opts?.body,
       signal: AbortSignal.timeout(15_000),
     });
   } catch {
@@ -143,6 +148,31 @@ server.registerTool(
     const since = Date.now() - h * 3_600_000;
     const data = (await api(`/recent?limit=200&since=${since}`)) as { pages: ApiHit[] };
     const text = data.pages.length === 0 ? 'no pages in that window' : data.pages.map(hitLine).join('\n');
+    return { content: [{ type: 'text', text }] };
+  }
+);
+
+server.registerTool(
+  'teach_page',
+  {
+    description:
+      'Teach the memory to keep pages like this one: stores the page as an exemplar, and future pages similar to it ' +
+      'survive the focus filter. Pass a page you are currently reading (its url, title and the text you have). ' +
+      'Use when the user says to remember/keep this kind of page or site.',
+    inputSchema: {
+      url: z.string().url().describe('page URL (http/https)'),
+      title: z.string().optional().describe('page title'),
+      content: z.string().min(1).max(2_000_000).describe('page text — the more representative, the better'),
+    },
+  },
+  async ({ url, title, content }) => {
+    const data = (await api('/api/exemplars', {
+      method: 'POST',
+      body: JSON.stringify({ url, title, content }),
+    })) as { exemplar?: { id: number }; error?: string };
+    const text = data.exemplar
+      ? `taught: exemplar #${data.exemplar.id} stored — similar pages will now be kept`
+      : `teach failed: ${data.error ?? 'unknown error'}`;
     return { content: [{ type: 'text', text }] };
   }
 );

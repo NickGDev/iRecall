@@ -191,11 +191,13 @@ app.post('/ingest', async (c) => {
       );
       if (verdicts) {
         const kept: PageInput[] = [];
-        pages.forEach((p, i) => {
+        let rescues = 0;
+        for (let i = 0; i < pages.length; i++) {
+          const p = pages[i]!;
           const vi = candidateIdx.indexOf(i);
           if (vi === -1) {
             kept.push(p);
-            return;
+            continue;
           }
           let domain = 'unknown';
           try {
@@ -206,12 +208,34 @@ app.post('/ingest', async (c) => {
           if (verdicts[vi]) {
             kept.push(p);
             noteFilter(domain, true);
+          } else if (rescues < 5) {
+            // Julia dropped it, but give the full verdict (taught exemplars +
+            // rule semantics) a chance — e.g. list/catalog pages the classifier
+            // reads as noise while the embedding scores them on-topic. Capped
+            // by ATTEMPTS (not successes) per batch: unbounded synchronous
+            // embedding inside the request is what pegged the server during
+            // the 2026-11-25 retry storm.
+            rescues++;
+            if (
+              await store.focusCheck(
+                typeof p.title === 'string' ? (p.title as string) : null,
+                domain,
+                typeof p.content === 'string' ? (p.content as string) : ''
+              )
+            ) {
+              kept.push(p);
+              noteFilter(domain, true);
+            } else {
+              filtered++;
+              filteredPages.push({ url: String(p.url ?? ''), domain });
+              noteFilter(domain, false);
+            }
           } else {
             filtered++;
             filteredPages.push({ url: String(p.url ?? ''), domain });
             noteFilter(domain, false);
           }
-        });
+        }
         pages = kept;
       }
     }
@@ -385,6 +409,40 @@ app.get('/api/filterlist', (c) => c.json({ domains: filterList(), stats: getFilt
 app.delete('/api/filterlist', (c) => {
   clearFilterStats();
   return c.json({ reset: true });
+});
+
+// --- exemplars: pages the user taught ("keep pages like this") ---------------------
+
+app.get('/api/exemplars', (c) => c.json({ exemplars: store.listExemplars() }));
+
+// Teach from raw page material (popup re-extract, MCP tool).
+app.post('/api/exemplars', async (c) => {
+  const body = await c.req.json<unknown>().catch(() => null);
+  if (!body || typeof body !== 'object') return c.json({ error: 'invalid json' }, 400);
+  try {
+    return c.json({ exemplar: await store.addExemplar(body as Record<string, unknown>) });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'teach failed' }, 400);
+  }
+});
+
+// Teach from an already-captured page.
+app.post('/api/exemplars/from/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'bad id' }, 400);
+  const page = store.getPage(id);
+  if (!page) return c.json({ error: 'not found' }, 404);
+  try {
+    return c.json({ exemplar: await store.addExemplar({ url: page.url, title: page.title, content: page.content }) });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'teach failed' }, 400);
+  }
+});
+
+app.delete('/api/exemplars/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'bad id' }, 400);
+  return c.json({ deleted: store.deleteExemplar(id) === 1 });
 });
 
 // --- user blocklist (canonical: popup, dashboard and extension share it) ---------
