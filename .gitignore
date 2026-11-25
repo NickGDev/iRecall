@@ -1,0 +1,12 @@
+node_modules/
+extension/dist/
+extension/recall-key.pem
+keys/
+server/data/
+server/.token
+server/server.log
+*.tsbuildinfo
+server/models/
+.codegraph/
+.hallmark/
+.DS_Store
