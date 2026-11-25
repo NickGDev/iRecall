@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Recall",
+  "description": "Local, private record of pages you read — searchable by your agents.",
+  "version": "0.1.7",
+  "permissions": ["storage", "alarms", "activeTab"],
+  "host_permissions": ["http://127.0.0.1:8787/*"],
+  "background": { "service_worker": "dist/background.js", "type": "module" },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["dist/spy.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["dist/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Recall",
+    "default_icon": {
+      "16": "dist/icons/icon16-base.png",
+      "32": "dist/icons/icon32-base.png",
+      "48": "dist/icons/icon48-base.png",
+      "128": "dist/icons/icon128-base.png"
+    }
+  }
+}

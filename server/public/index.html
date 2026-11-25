@@ -1,0 +1,1202 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Recall dashboard</title>
+    <meta name="description" content="Search, manage and tune your local Recall page record." />
+    <link rel="icon" href="data:," />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Host+Grotesk:wght@400;500&family=Atkinson+Hyperlegible+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* Hallmark · v2.0.0
+       * theme: Console (dealt 3/3) · console: graphite · genre: modern-minimal · shape: app screen
+       * screen: recall dashboard, five hash tabs (search, pages, focus, blocked, settings) · states: loading, empty, error, full
+       * redesign: full · keeps: every endpoint, handler and id on record (.hallmark/before.json)
+       * pre-emit critique: P5 H4 E4 S4 R4 V4 · weakest: V, first Console build in the log
+       * finish-review: subagent · round 1 recapture (3 shots caught a server hiccup; failure states fixed) · round 2: 5 findings, 5 resolved
+       */
+      /* Hallmark · dropped /rules · the link became the Focus tab and /rules redirects there */
+      /* Hallmark · dropped focus-note, logs-empty, retention-note, state-label · the helpers moved into intro copy and the status region */
+      :root {
+        color-scheme: dark;
+        --color-paper: oklch(17% 0.008 250);
+        --color-paper-2: oklch(21% 0.009 250);
+        --color-paper-3: oklch(13.5% 0.007 250);
+        --color-ink: oklch(95% 0.005 250);
+        --color-ink-2: oklch(83% 0.008 250);
+        --color-muted: oklch(71% 0.01 250);
+        --color-rule: oklch(31% 0.01 250);
+        --color-rule-2: oklch(42% 0.012 250);
+        --color-accent: oklch(82% 0.15 80);
+        --color-accent-ink: oklch(18% 0.04 75);
+        --color-accent-soft: oklch(29% 0.05 80);
+        --color-focus: oklch(82% 0.15 80);
+        --color-cool: oklch(77% 0.12 245);
+        --color-cool-soft: oklch(29% 0.05 245);
+        --color-ok: oklch(76% 0.15 150);
+        --color-ok-soft: oklch(24.5% 0.03 150);
+        --color-bad: oklch(70% 0.17 25);
+        --color-bad-soft: oklch(24.5% 0.035 25);
+        --font-display: "Host Grotesk", ui-sans-serif, system-ui, sans-serif;
+        --font-body: var(--font-display);
+        --font-outlier: "Atkinson Hyperlegible Mono", ui-monospace, monospace;
+        --radius-card: 10px;
+        --radius-pill: 6px;
+        --rule-hair: 1px;
+        --tracking-display: -0.03em;
+        --dur-micro: 120ms;
+        --dur-short: 220ms;
+        --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+        --space-2xs: 4px;
+        --space-2xs: 4px;
+        --space-xs: 8px;
+        --space-sm: 12px;
+        --space-md: 16px;
+        --space-lg: 24px;
+        --space-xl: 40px;
+      }
+      * { box-sizing: border-box; }
+      html, body { overflow-x: clip; }
+      body {
+        margin: 0;
+        background: var(--color-paper);
+        color: var(--color-ink);
+        font: 400 16px/1.55 var(--font-body);
+      }
+      a {
+        color: var(--color-ink-2);
+        text-decoration: underline;
+        text-decoration-color: var(--color-rule-2);
+        text-underline-offset: 2px;
+      }
+      a:hover { color: var(--color-accent); }
+      :focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+      input:focus-visible, textarea:focus-visible, select:focus-visible { outline-offset: -3px; }
+      ::selection { background: color-mix(in oklab, var(--color-accent) 25%, transparent); }
+      html { scrollbar-color: var(--color-rule-2) var(--color-paper); caret-color: var(--color-accent); }
+      [hidden] { display: none !important; }
+      h1, h2, h3 {
+        font-family: var(--font-display);
+        font-weight: 500;
+        letter-spacing: var(--tracking-display);
+        line-height: 1.1;
+        text-wrap: balance;
+        margin: 0;
+      }
+      h2 { font-size: 20px; }
+      @media (prefers-reduced-motion: reduce) {
+        * { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+      }
+
+      .container { max-width: 960px; margin: 0 auto; padding: 0 var(--space-md); }
+      .topbar {
+        display: flex;
+        align-items: center;
+        gap: var(--space-md);
+        padding: var(--space-sm) 0;
+        border-bottom: var(--rule-hair) solid var(--color-rule);
+        flex-wrap: wrap;
+      }
+      .wordmark { font: 500 18px var(--font-display); letter-spacing: var(--tracking-display); }
+      .tabs { display: flex; gap: var(--space-2xs); flex-wrap: wrap; }
+      .tabs a {
+        font: 500 13px var(--font-body);
+        color: var(--color-muted);
+        text-decoration: none;
+        padding: var(--space-2xs) var(--space-sm);
+        border-radius: 4px;
+        border: var(--rule-hair) solid transparent;
+      }
+      .tabs a:hover { color: var(--color-ink); background: var(--color-paper-2); }
+      .tabs a[aria-current="page"] {
+        color: var(--color-cool);
+        background: var(--color-cool-soft);
+        border-color: var(--color-rule);
+      }
+      .topbar .pill { margin-left: auto; }
+      .status {
+        min-height: 1.5em;
+        margin: 0;
+        padding: var(--space-xs) 0 0;
+        font-size: 14px;
+        color: var(--color-muted);
+      }
+      .status.ok { color: var(--color-ok); }
+      .status.bad { color: var(--color-bad); }
+
+      .tab-view { padding: var(--space-lg) 0 var(--space-xl); }
+      .tab-head { margin: 0 0 var(--space-sm); }
+      .tab-intro { margin: 0 0 var(--space-md); font-size: 14px; color: var(--color-muted); max-width: 65ch; }
+
+      .panel {
+        border: var(--rule-hair) solid var(--color-rule);
+        border-radius: var(--radius-card);
+        background: var(--color-paper-2);
+        color: var(--color-ink);
+      }
+      .panels {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: var(--rule-hair);
+        background: var(--color-rule);
+        color: var(--color-ink);
+        border: var(--rule-hair) solid var(--color-rule);
+        border-radius: var(--radius-card);
+        overflow: hidden;
+      }
+      .panels > * { background: var(--color-paper-2); color: var(--color-ink); padding: var(--space-sm) var(--space-md); min-width: 0; }
+      .stat b {
+        display: block;
+        font: 500 24px var(--font-outlier);
+        font-variant-numeric: tabular-nums;
+        color: var(--color-ink);
+      }
+      .stat span { font-size: 13px; color: var(--color-muted); }
+      @media (max-width: 640px) { .panels { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+      .label { font: 500 13px var(--font-body); color: var(--color-muted); display: block; margin: 0 0 var(--space-2xs); }
+      .field { margin: 0 0 var(--space-md); }
+      input[type="text"], textarea, select {
+        font: 400 15px var(--font-body);
+        color: var(--color-ink);
+        background: var(--color-paper-3);
+        border: var(--rule-hair) solid var(--color-muted);
+        border-radius: var(--radius-pill);
+        padding: var(--space-2xs) var(--space-sm);
+        width: 100%;
+      }
+      input::placeholder, textarea::placeholder { color: var(--color-muted); }
+      textarea { min-height: 90px; resize: vertical; }
+
+      .btn {
+        font: 500 14px var(--font-body);
+        padding: var(--space-2xs) var(--space-md);
+        min-height: 34px;
+        border-radius: var(--radius-pill);
+        border: var(--rule-hair) solid var(--color-rule-2);
+        background: var(--color-paper-2);
+        color: var(--color-ink);
+        cursor: pointer;
+        transition: background-color var(--dur-micro) var(--ease-out);
+      }
+      .btn:hover { background: var(--color-paper-3); }
+      .btn:active { transform: translateY(1px); }
+      .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+      .btn-primary {
+        background: var(--color-accent);
+        border-color: var(--color-accent);
+        color: var(--color-accent-ink);
+      }
+      .btn-primary:hover { background: color-mix(in oklab, var(--color-accent) 88%, white); }
+      .btn-danger {
+        color: var(--color-bad);
+        border-color: color-mix(in oklab, var(--color-bad) 45%, var(--color-rule));
+        background: transparent;
+      }
+      .btn-danger:hover { background: var(--color-bad-soft); }
+
+      .row { display: flex; gap: var(--space-xs); align-items: center; flex-wrap: wrap; }
+      .row .grow { flex: 1; min-width: 0; }
+
+      .searchbar { display: flex; gap: var(--space-xs); align-items: stretch; flex-wrap: wrap; margin: 0 0 var(--space-md); }
+      .searchbar input { flex: 1 1 240px; min-width: 0; min-height: 38px; width: auto; }
+      .searchbar .btn { min-height: 38px; }
+
+      .trail { overflow: hidden; }
+      .trail-row {
+        display: grid;
+        grid-template-columns: 96px minmax(0, 1fr) auto;
+        gap: var(--space-sm);
+        /* rows keep the hairline rhythm */
+        padding: var(--space-xs) var(--space-md);
+        border-top: var(--rule-hair) solid var(--color-rule);
+        align-items: baseline;
+      }
+      .trail-row:first-child { border-top: none; }
+      .trail-time { font: 400 13px var(--font-outlier); color: var(--color-cool); font-variant-numeric: tabular-nums; }
+      .trail-body { min-width: 0; }
+      .trail-title {
+        font-weight: 500;
+        color: var(--color-ink);
+        text-decoration: underline;
+        text-decoration-color: var(--color-rule-2);
+        text-underline-offset: 2px;
+        overflow-wrap: break-word;
+      }
+      .trail-title:hover { color: var(--color-accent); }
+      .trail-meta { display: flex; gap: var(--space-xs); font-size: 13px; color: var(--color-muted); margin-top: 2px; flex-wrap: wrap; }
+      .trail-meta .dom { font-family: var(--font-outlier); font-size: 12px; }
+      .snippet { font-size: 14px; color: var(--color-ink-2); margin-top: var(--space-xs); max-width: 65ch; }
+      .chip {
+        font: 500 12px var(--font-body);
+        padding: 1px var(--space-xs);
+        border-radius: 4px;
+        border: var(--rule-hair) solid var(--color-rule);
+      }
+      .chip.stale { background: var(--color-accent-soft); color: var(--color-accent); }
+      .chip.ignored { background: var(--color-cool-soft); color: var(--color-cool); }
+      .trail-actions { display: flex; gap: var(--space-2xs); align-items: center; }
+      .mini {
+        font: 500 12px var(--font-body);
+        padding: var(--space-2xs) var(--space-xs);
+        min-height: 26px;
+        border-radius: 4px;
+        border: var(--rule-hair) solid var(--color-rule-2);
+        background: var(--color-paper-2);
+        color: var(--color-ink-2);
+        cursor: pointer;
+      }
+      .mini:hover { background: var(--color-paper-3); color: var(--color-ink); }
+      .mini:active { transform: translateY(1px); }
+      .mini:disabled { opacity: 0.55; cursor: not-allowed; }
+      .mini.danger { color: var(--color-bad); border-color: color-mix(in oklab, var(--color-bad) 40%, var(--color-rule)); }
+      .mini.danger:hover { background: var(--color-bad-soft); color: var(--color-bad); }
+      @media (max-width: 640px) {
+        .trail-row { grid-template-columns: 1fr; gap: var(--space-2xs); }
+        .trail-actions { justify-content: flex-start; }
+      }
+      @media (max-width: 480px) {
+        .topbar { gap: var(--space-xs); }
+        .tabs { order: 3; flex-basis: 100%; }
+        .tabs a { padding: var(--space-2xs) var(--space-xs); }
+      }
+
+      .empty {
+        color: var(--color-muted);
+        padding: var(--space-md);
+        text-align: center;
+        font-size: 14px;
+        border: var(--rule-hair) dashed var(--color-rule);
+        border-radius: var(--radius-card);
+      }
+      .skel { height: 14px; border-radius: 4px; background: var(--color-paper-3); margin: var(--space-xs) var(--space-md); }
+      .error-box {
+        color: var(--color-bad);
+        background: var(--color-bad-soft);
+        border-radius: var(--radius-pill);
+        padding: var(--space-xs) var(--space-sm);
+        font-size: 14px;
+      }
+
+      .section { margin-top: var(--space-xl); }
+      .danger-zone { padding: var(--space-md); }
+      .danger-zone .row { margin: 0 0 var(--space-xs); }
+      .danger-zone input, .danger-zone select { max-width: 340px; }
+
+      .rule-card { padding: var(--space-md); border-top: var(--rule-hair) solid var(--color-rule); }
+      .rule-card:first-child { border-top: none; }
+      .rule-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-sm); flex-wrap: wrap; }
+      .rule-scope { font-weight: 500; }
+      .kv { font-size: 14px; margin: var(--space-2xs) 0; color: var(--color-ink-2); }
+      .kv b { color: var(--color-muted); font-weight: 500; }
+      .sample { font-size: 13px; padding: var(--space-2xs) 0; border-top: var(--rule-hair) dashed var(--color-rule); }
+      .score { font: 400 12px var(--font-outlier); color: var(--color-cool); font-variant-numeric: tabular-nums; }
+      .badge {
+        font: 500 12px var(--font-body);
+        padding: 1px var(--space-xs);
+        border-radius: 4px;
+        border: var(--rule-hair) solid var(--color-rule);
+      }
+      .badge.on { background: var(--color-ok-soft); color: var(--color-ok); border-color: transparent; }
+      .badge.off { background: var(--color-paper-3); color: var(--color-muted); }
+      .badge.novec { background: var(--color-accent-soft); color: var(--color-accent); border-color: transparent; }
+
+      table { width: 100%; border-collapse: collapse; }
+      th {
+        text-align: left;
+        font: 500 13px var(--font-body);
+        color: var(--color-muted);
+        padding: var(--space-xs);
+        border-bottom: var(--rule-hair) solid var(--color-rule);
+      }
+      td { padding: var(--space-xs); border-bottom: var(--rule-hair) solid var(--color-rule); font-size: 14px; }
+      td.mono { font-family: var(--font-outlier); font-size: 13px; color: var(--color-cool); }
+      tr.ignored-row td { background: var(--color-cool-soft); }
+
+      .pill {
+        font: 500 13px var(--font-body);
+        padding: var(--space-2xs) var(--space-sm);
+        border-radius: var(--radius-pill);
+        border: var(--rule-hair) solid var(--color-rule-2);
+        background: var(--color-paper-2);
+        color: var(--color-ink-2);
+        cursor: pointer;
+        min-height: 30px;
+      }
+      .pill.on { background: var(--color-ok-soft); border-color: transparent; color: var(--color-ok); }
+      .pill.off { background: var(--color-bad-soft); border-color: transparent; color: var(--color-bad); }
+      .pill:disabled { opacity: 0.55; cursor: not-allowed; }
+
+      .settings-line { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-sm); padding: var(--space-sm) 0; border-top: var(--rule-hair) solid var(--color-rule); flex-wrap: wrap; }
+      .settings-line:first-child { border-top: none; }
+      .measured { font: 400 14px var(--font-outlier); color: var(--color-cool); font-variant-numeric: tabular-nums; }
+      .muted { color: var(--color-muted); font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <header class="container">
+      <div class="topbar">
+        <span class="wordmark">Recall</span>
+        <nav class="tabs" aria-label="Dashboard sections">
+          <a href="#search">Search</a>
+          <a href="#pages">Pages</a>
+          <a href="#focus">Focus</a>
+          <a href="#blocked">Blocked</a>
+          <a href="#settings">Settings</a>
+        </nav>
+        <button id="record-pill" class="pill off" type="button">…</button>
+      </div>
+      <p class="status" id="status" role="status" aria-live="polite"></p>
+    </header>
+
+    <main class="container">
+      <!-- search --------------------------------------------------------- -->
+      <section class="tab-view" id="view-search" hidden>
+        <h2 class="tab-head">Search your history</h2>
+        <form id="search-form" class="searchbar">
+          <label class="label" for="q" style="flex-basis: 100%">Search pages, keyword and semantic</label>
+          <input type="text" id="q" placeholder="e.g. sqlite fts5 tuning" autocomplete="off" />
+          <button class="btn btn-primary" id="go" type="submit">Search</button>
+        </form>
+        <div id="results" aria-live="polite"></div>
+      </section>
+
+      <!-- pages ---------------------------------------------------------- -->
+      <section class="tab-view" id="view-pages" hidden>
+        <h2 class="tab-head">The record</h2>
+        <p class="tab-intro">Everything stored right now. Deleting here is permanent.</p>
+        <div class="panels" id="cards"></div>
+        <div class="section">
+          <h2 class="tab-head">Latest captures</h2>
+          <div class="panel trail" id="recent"></div>
+        </div>
+        <div class="section">
+          <h2 class="tab-head">Delete data</h2>
+          <div class="panel danger-zone">
+            <div class="row">
+              <label class="label" for="domain" style="flex-basis: 100%">Delete every stored page from one site</label>
+              <input type="text" id="domain" class="grow" placeholder="e.g. news.ycombinator.com" />
+              <button id="del-domain" class="btn btn-danger" type="button">Delete site pages</button>
+            </div>
+            <div class="row" style="margin-top: 12px">
+              <label class="label" for="older" style="flex-basis: 100%">Delete pages older than</label>
+              <select id="older">
+                <option value="1">yesterday</option>
+                <option value="7">7 days</option>
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+                <option value="all">everything</option>
+              </select>
+              <button id="del-older" class="btn btn-danger" type="button">Delete</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- focus ---------------------------------------------------------- -->
+      <section class="tab-view" id="view-focus" hidden>
+        <h2 class="tab-head">Focus rules</h2>
+        <p class="tab-intro">
+          Pages are kept when their content sits close to a topic below, or mentions a keyword
+          verbatim. Everything else in scope is pruned at ingest and on the hourly sweep. Pages
+          not yet embedded are never deleted.
+        </p>
+        <div class="panel" style="padding: var(--space-md)">
+          <h3 class="tab-head" id="form-title" style="font-size: 17px">New rule</h3>
+          <div class="field">
+            <label class="label" for="f-domain">Scope, domain (blank means all sites)</label>
+            <input type="text" id="f-domain" placeholder="e.g. reddit.com" />
+          </div>
+          <div class="field">
+            <label class="label" for="f-topics">Topics, one description per line, written like search queries for pages worth keeping</label>
+            <textarea id="f-topics"></textarea>
+          </div>
+          <div class="field">
+            <label class="label" for="f-keywords">Keyword boosts, kept immediately on exact mention (comma separated, optional)</label>
+            <input type="text" id="f-keywords" placeholder="e.g. llm, rag, mcp" />
+          </div>
+          <div class="field row">
+            <label class="label" for="f-threshold" style="flex-basis: 100%">
+              Strictness, higher keeps less
+              <output id="threshold-val" for="f-threshold" class="measured">0.35</output>
+            </label>
+            <input type="range" id="f-threshold" min="0.15" max="0.65" step="0.05" value="0.35" style="width: 100%" />
+          </div>
+          <div class="row">
+            <button id="preview-btn" class="btn" type="button">Preview on stored pages</button>
+            <button id="save-btn" class="btn btn-primary" type="button">Save rule</button>
+            <button id="clear-btn" class="btn" type="button">Clear form</button>
+          </div>
+          <div id="preview-result" aria-live="polite"></div>
+        </div>
+        <div class="section">
+          <h2 class="tab-head">Active rules</h2>
+          <div class="panel" id="rule-list"></div>
+        </div>
+      </section>
+
+      <!-- blocked -------------------------------------------------------- -->
+      <section class="tab-view" id="view-blocked" hidden>
+        <h2 class="tab-head">Blocked sites</h2>
+        <p class="tab-intro">
+          The extension skips every page on a blocked site, including subdomains. The list is
+          shared by the popup, this dashboard and the tray.
+        </p>
+        <div class="row" style="margin-bottom: var(--space-md)">
+          <div class="grow">
+            <label class="label" for="block-domain">Block a site</label>
+            <input type="text" id="block-domain" placeholder="e.g. tracker-news.example" style="width: 100%" />
+          </div>
+          <button id="block-add" class="btn btn-primary" type="button" style="align-self: flex-end">Block site</button>
+        </div>
+        <div class="panel trail" id="blocked-list"></div>
+        <div class="section">
+          <h2 class="tab-head">Auto-ignored sites</h2>
+          <p class="tab-intro">
+            Sites whose captures the focus rules keep rejecting are ignored at the source once
+            they cross the bar (10 rejections, zero keeps). One keep protects a site.
+          </p>
+          <table id="auto-table">
+            <thead>
+              <tr><th scope="col">Site</th><th scope="col">Rejected</th><th scope="col">Kept</th><th scope="col">State</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <div class="row" style="margin-top: var(--space-xs)">
+            <button id="reset-auto" class="btn btn-danger" type="button">Reset auto-ignore memory</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- settings ------------------------------------------------------- -->
+      <section class="tab-view" id="view-settings" hidden>
+        <h2 class="tab-head">Settings</h2>
+        <div class="panel" style="padding: 0 var(--space-md)">
+          <div class="settings-line">
+            <div>
+              <b>Recording</b>
+              <p class="muted" style="margin: 2px 0 0">Pausing stops new captures at the server gate; pages read before the pause still land.</p>
+            </div>
+            <button id="record-pill-settings" class="pill off" type="button">…</button>
+          </div>
+          <div class="settings-line">
+            <div>
+              <b>Keep pages for</b>
+              <p class="muted" style="margin: 2px 0 0">Older pages are purged on the hourly sweep.</p>
+            </div>
+            <div class="row" style="justify-content: flex-end">
+              <label class="label" for="retention" style="margin: 0 8px var(--space-xs) 0; flex-basis: 100%">Retention</label>
+              <select id="retention" style="width: auto">
+                <option value="0">forever</option>
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+                <option value="365">1 year</option>
+              </select>
+            </div>
+          </div>
+          <div class="settings-line">
+            <div>
+              <b>Server</b>
+              <p class="muted measured" style="margin: 2px 0 0" id="health-line">checking…</p>
+            </div>
+          </div>
+          <div class="settings-line">
+            <div>
+              <b>Extension</b>
+              <p class="muted measured" style="margin: 2px 0 0" id="ext-line">checking…</p>
+              <p class="muted measured" style="margin: 2px 0 0" id="ext-hint" hidden></p>
+            </div>
+            <button id="ext-reinstall" class="btn" type="button">Reinstall</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      let token = '';
+      const $ = (id) => document.getElementById(id);
+      const auth = () => ({ headers: { authorization: 'Bearer ' + token } });
+      async function api(path, opts) {
+        const attempt = async () => {
+          const res = await fetch(path, Object.assign(auth(), opts || {}));
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || path + ' failed: ' + res.status);
+          }
+          return res.json();
+        };
+        try {
+          return await attempt();
+        } catch (e) {
+          // HTTP errors (res.ok false) are real answers, not transport noise:
+          // only a network-level throw earns one retry.
+          if (!(e instanceof TypeError)) throw e;
+          await new Promise((r) => setTimeout(r, 400));
+          return attempt();
+        }
+      }
+      function el(tag, cls, text) {
+        const node = document.createElement(tag);
+        if (cls) node.className = cls;
+        if (text !== undefined) node.textContent = text;
+        return node;
+      }
+      let statusTimer;
+      function showStatus(msg, kind) {
+        const box = $('status');
+        box.textContent = msg;
+        box.className = 'status' + (kind ? ' ' + kind : '');
+        clearTimeout(statusTimer);
+        if (msg) statusTimer = setTimeout(() => { box.textContent = ''; box.className = 'status'; }, 4000);
+      }
+      function fmtAge(days) {
+        if (days < 1) return 'today';
+        if (days < 30) return Math.round(days) + 'd old';
+        if (days < 365) return Math.round(days / 30) + 'mo old';
+        return (days / 365).toFixed(1) + 'yr old';
+      }
+      function confirmDelete(label) {
+        return window.confirm('Delete ' + label + '? This cannot be undone.');
+      }
+
+      // --- recording pill (topbar + settings mirror one server flag) ----------
+      async function renderState() {
+        try {
+          const cfg = await api('/config');
+          for (const pill of [$('record-pill'), $('record-pill-settings')]) {
+            pill.textContent = cfg.recording ? 'Recording' : 'Paused';
+            pill.className = 'pill ' + (cfg.recording ? 'on' : 'off');
+            pill.disabled = false;
+          }
+        } catch (e) {
+          showStatus(e.message, 'bad');
+        }
+      }
+      async function toggleRecording() {
+        const cfg = await api('/config');
+        for (const pill of [$('record-pill'), $('record-pill-settings')]) {
+          pill.disabled = true;
+          pill.textContent = '…';
+        }
+        try {
+          await api('/config', { method: 'POST', body: JSON.stringify({ recording: !cfg.recording }) });
+          showStatus(!cfg.recording ? 'recording resumed' : 'recording paused', 'ok');
+        } catch {
+          showStatus('could not reach the server, state unchanged', 'bad');
+        }
+        await renderState();
+      }
+      $('record-pill').onclick = () => toggleRecording().catch((e) => showStatus(e.message, 'bad'));
+      $('record-pill-settings').onclick = () => toggleRecording().catch((e) => showStatus(e.message, 'bad'));
+
+      // --- trails (recent pages, search results, blocked sites) ---------------
+      function trailRow(opts) {
+        const row = el('div', 'trail-row');
+        if (opts.time.includes('|')) {
+          // date and time as two deliberate stacked readings, never one wrapped value
+          const cell = el('span', '');
+          cell.style.display = 'flex';
+          cell.style.flexDirection = 'column';
+          for (const part of opts.time.split('|')) cell.appendChild(el('span', 'trail-time', part));
+          row.appendChild(cell);
+        } else {
+          row.appendChild(el('span', 'trail-time', opts.time));
+        }
+        const body = el('div', 'trail-body');
+        if (opts.href) {
+          const a = document.createElement('a');
+          a.className = 'trail-title';
+          a.href = opts.href;
+          a.textContent = opts.title;
+          body.appendChild(a);
+        } else {
+          body.appendChild(el('span', 'trail-title', opts.title));
+        }
+        if (opts.meta && opts.meta.length) {
+          const meta = el('div', 'trail-meta');
+          for (const m of opts.meta) meta.appendChild(el('span', m.cls || '', m.text));
+          body.appendChild(meta);
+        }
+        if (opts.snippet) body.appendChild(el('div', 'snippet', opts.snippet));
+        row.appendChild(body);
+        if (opts.actions && opts.actions.length) {
+          const actions = el('div', 'trail-actions');
+          for (const a of opts.actions) actions.appendChild(a);
+          row.appendChild(actions);
+        }
+        return row;
+      }
+      function miniBtn(label, cls, onclick) {
+        const b = el('button', 'mini' + (cls ? ' ' + cls : ''), label);
+        b.type = 'button';
+        b.onclick = onclick;
+        return b;
+      }
+      function failInto(box, msg) {
+        box.textContent = '';
+        const div = el('div', 'error-box');
+        div.textContent = msg;
+        box.appendChild(div);
+      }
+      function skeletons(box, n) {
+        box.textContent = '';
+        for (let i = 0; i < n; i++) box.appendChild(el('div', 'skel'));
+      }
+      function emptyBox(box, lines) {
+        box.textContent = '';
+        const div = el('div', 'empty');
+        div.append(...lines);
+        box.appendChild(div);
+      }
+
+      function hitActions(hit, rerender) {
+        return [
+          miniBtn('Block site', '', async () => {
+            try {
+              const cur = await api('/api/blocked');
+              const domains = cur.domains.map((d) => d.domain);
+              if (!domains.includes(hit.domain)) domains.push(hit.domain);
+              await api('/api/blocked', { method: 'PUT', body: JSON.stringify({ domains }) });
+              showStatus('blocked ' + hit.domain, 'ok');
+              loaded.blocked = false;
+            } catch (e) {
+              showStatus(e.message, 'bad');
+            }
+          }),
+          miniBtn('Delete', 'danger', async () => {
+            if (!confirmDelete('this page (' + (hit.title || hit.domain) + ')')) return;
+            await api('/pages/' + hit.id, { method: 'DELETE' });
+            showStatus('page deleted', 'ok');
+            rerender();
+          }),
+        ];
+      }
+
+      // --- search tab ----------------------------------------------------------
+      function renderHits(hits) {
+        const box = $('results');
+        box.textContent = '';
+        if (!hits.length) {
+          emptyBox(box, [el('span', '', 'no results. try fewer or different words.')]);
+          return;
+        }
+        const trail = el('div', 'panel trail');
+        hits.forEach((hit) => {
+          const meta = [{ text: hit.domain, cls: 'dom' }, { text: fmtAge(hit.ageDays) }];
+          if (hit.supersededBy) meta.push({ text: 'superseded by #' + hit.supersededBy, cls: '' });
+          else if (hit.stale) meta.push({ text: 'stale', cls: '' });
+          trail.appendChild(
+            trailRow({
+              time: new Date(hit.capturedAt).toLocaleDateString([], { month: 'short', day: 'numeric' }),
+              href: hit.url,
+              title: hit.title || hit.url,
+              meta,
+              snippet: hit.snippet,
+              actions: hitActions(hit, () => {
+                renderHits(hits.filter((h) => h.id !== hit.id));
+                renderCards().catch(() => {});
+              }),
+            })
+          );
+        });
+        box.appendChild(trail);
+      }
+
+      async function doSearch() {
+        const q = $('q').value.trim();
+        if (!q) {
+          emptyBox($('results'), [el('span', '', 'type a query above.')]);
+          return;
+        }
+        const btn = $('go');
+        btn.disabled = true;
+        btn.textContent = 'Searching…';
+        $('results').dataset.searched = '1';
+        skeletons($('results'), 4);
+        try {
+          const data = await api('/search?q=' + encodeURIComponent(q) + '&limit=25');
+          renderHits(data.hits);
+        } catch (e) {
+          emptyBox($('results'), [el('span', 'error-box', e.message)]);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = 'Search';
+        }
+      }
+      $('search-form').onsubmit = (e) => {
+        e.preventDefault();
+        doSearch();
+      };
+
+      // --- pages tab -----------------------------------------------------------
+      async function renderCards() {
+        let stats;
+        try {
+          stats = await api('/stats');
+        } catch {
+          failInto($('cards'), 'could not load stats. check that recall is running.');
+          return;
+        }
+        const cards = $('cards');
+        cards.textContent = '';
+        const add = (label, value) => {
+          const cell = el('div', 'stat');
+          cell.append(el('b', '', value), el('span', '', label));
+          cards.appendChild(cell);
+        };
+        add('pages stored', stats.pages.toLocaleString());
+        add('sites', stats.domains.toLocaleString());
+        add('embedded', stats.embedded.toLocaleString());
+        add('db size', (stats.dbBytes / 1048576).toFixed(1) + ' MB');
+      }
+
+      async function renderRecent(intoResults) {
+        const box = $('recent');
+        let rows;
+        try {
+          rows = await api('/recent?limit=15');
+        } catch {
+          const target = intoResults ? $('results') : box;
+          failInto(target, 'could not load recent pages. check that recall is running.');
+          return;
+        }
+        box.textContent = '';
+        const wrap = intoResults ? document.createElement('div') : box;
+        if (intoResults) {
+          wrap.className = 'panel trail';
+          const target = $('results');
+          if (target.dataset.searched === '1') return; // a query owns the area now
+          const label = target.querySelector('p.muted');
+          target.textContent = '';
+          if (label) target.appendChild(label);
+          target.appendChild(wrap);
+        }
+        if (!rows.pages.length) {
+          emptyBox(wrap, [
+            el('span', '', 'nothing captured yet. '),
+            el('span', '', 'browse a few pages with the extension installed and they land here.'),
+          ]);
+          return;
+        }
+        rows.pages.forEach((page) => {
+          wrap.appendChild(
+            trailRow({
+              time:
+                new Date(page.capturedAt).toLocaleDateString([], { month: 'short', day: 'numeric' }) +
+                '|' +
+                new Date(page.capturedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              href: page.url,
+              title: page.title || page.domain,
+              meta: [{ text: page.domain, cls: 'dom' }],
+              actions: [
+                miniBtn('Delete', 'danger', async () => {
+                  if (!confirmDelete('this page (' + (page.title || page.domain) + ')')) return;
+                  await api('/pages/' + page.id, { method: 'DELETE' });
+                  showStatus('page deleted', 'ok');
+                  renderRecent(document.querySelector('#view-search:not([hidden])') ? true : false).catch(() => {});
+                  renderCards().catch(() => {});
+                }),
+              ],
+            })
+          );
+        });
+      }
+
+      $('del-domain').onclick = async function () {
+        const domain = $('domain').value.trim();
+        if (!domain || !confirmDelete('ALL pages from ' + domain)) return;
+        const res = await api('/pages?domain=' + encodeURIComponent(domain), { method: 'DELETE' });
+        showStatus('deleted ' + res.deleted + ' pages', 'ok');
+        renderCards().catch(() => {});
+        renderRecent().catch(() => {});
+      };
+      $('del-older').onclick = async function () {
+        const value = $('older').value;
+        const query = value === 'all' ? '?olderThanDays=0' : '?olderThanDays=' + value;
+        const label = value === 'all' ? 'EVERYTHING' : 'pages older than ' + value + ' day(s)';
+        if (!confirmDelete(label)) return;
+        const res = await api('/pages' + query, { method: 'DELETE' });
+        showStatus('deleted ' + res.deleted + ' pages', 'ok');
+        renderCards().catch(() => {});
+        renderRecent().catch(() => {});
+      };
+
+      // --- focus tab (ported from rules.html, alerts now inline) ---------------
+      let editingId = null;
+      function formPayload() {
+        return {
+          domain: $('f-domain').value.trim() || null,
+          topics: $('f-topics').value,
+          keywords: $('f-keywords').value,
+          threshold: Number($('f-threshold').value),
+        };
+      }
+      function loadForm(rule) {
+        editingId = rule ? rule.id : null;
+        $('form-title').textContent = rule ? 'Editing rule #' + rule.id : 'New rule';
+        $('f-domain').value = rule ? rule.domain || '' : '';
+        $('f-topics').value = rule ? rule.topics.join('\n') : '';
+        $('f-keywords').value = rule ? rule.keywords.join(', ') : '';
+        $('f-threshold').value = rule ? rule.threshold : 0.35;
+        $('threshold-val').textContent = Number($('f-threshold').value).toFixed(2);
+        if (rule) $('f-domain').focus();
+      }
+      function renderPreview(res) {
+        const box = $('preview-result');
+        box.textContent = '';
+        if (res.error) {
+          box.appendChild(el('div', 'muted', res.error));
+          return;
+        }
+        box.appendChild(
+          el('div', 'kv', 'would prune ' + res.wouldPrune + ', kept ' + res.kept + ', undecided (not yet embedded) ' + res.undecided)
+        );
+        (res.samples || []).forEach((s) => {
+          const row = el('div', 'sample');
+          row.append(el('span', 'score', s.score.toFixed(3)), el('span', '', ' ' + (s.title || s.url) + ', ' + s.url));
+          box.appendChild(row);
+        });
+        if (!(res.samples || []).length && res.wouldPrune > 0) box.appendChild(el('div', 'muted', 'no samples'));
+      }
+      function renderRule(rule) {
+        const card = el('div', 'rule-card');
+        const head = el('div', 'rule-head');
+        head.appendChild(el('span', 'rule-scope', rule.domain ? rule.domain + ' (+ subdomains)' : 'all sites'));
+        const badges = el('span', '');
+        badges.appendChild(el('span', 'badge ' + (rule.enabled ? 'on' : 'off'), rule.enabled ? 'enabled' : 'disabled'));
+        if (!rule.hasVectors) badges.appendChild(el('span', 'badge novec', ' topic vectors pending'));
+        head.appendChild(badges);
+        card.appendChild(head);
+        const topics = el('div', 'kv');
+        topics.appendChild(el('b', '', 'topics: '));
+        topics.appendChild(el('span', '', rule.topics.join(', ')));
+        card.appendChild(topics);
+        if (rule.keywords.length) {
+          const kw = el('div', 'kv');
+          kw.appendChild(el('b', '', 'keyword boosts: '));
+          kw.appendChild(el('span', '', rule.keywords.join(', ')));
+          card.appendChild(kw);
+        }
+        card.appendChild(el('div', 'kv', 'keep when similarity ≥ ' + rule.threshold));
+        const actions = el('div', 'row');
+        const toggle = miniBtn(rule.enabled ? 'disable' : 'enable', '', async () => {
+          if (rule.enabled === false) {
+            const ok = window.confirm(
+              'Enable this rule? Pages in scope that match nothing will be pruned on save and at each sweep.'
+            );
+            if (!ok) return;
+          }
+          const res = await api('/api/rules/' + rule.id, {
+            method: 'PATCH',
+            body: JSON.stringify({ enabled: !rule.enabled }),
+          });
+          showStatus(
+            res.enabled
+              ? 'rule enabled, pruned ' + res.pruned + ' page(s) in scope'
+              : 'rule disabled, nothing is pruned by it now',
+            'ok'
+          );
+          renderRules().catch(() => {});
+        });
+        const edit = miniBtn('edit', '', () => {
+          loadForm(rule);
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+        const del = miniBtn('delete', 'danger', async () => {
+          if (!window.confirm('Delete this rule? Existing pages are kept, only future pruning stops.')) return;
+          await api('/api/rules/' + rule.id, { method: 'DELETE' });
+          showStatus('rule deleted', 'ok');
+          renderRules().catch(() => {});
+        });
+        actions.append(toggle, edit, del);
+        card.appendChild(actions);
+        return card;
+      }
+      async function renderRules() {
+        let data;
+        try {
+          data = await api('/api/rules');
+        } catch {
+          failInto($('rule-list'), 'could not load focus rules. check that recall is running.');
+          return;
+        }
+        const box = $('rule-list');
+        box.textContent = '';
+        if (data.pruned > 0) box.appendChild(el('div', 'kv muted', 'pages pruned by focus rules this session: ' + data.pruned));
+        if (!data.rules.length) {
+          emptyBox(box, [
+            el('span', '', 'no rules, so everything is remembered. '),
+            el('span', '', 'save one above to prune off-topic captures.'),
+          ]);
+          return;
+        }
+        data.rules.forEach((r) => box.appendChild(renderRule(r)));
+      }
+
+      $('f-threshold').oninput = (e) => {
+        $('threshold-val').textContent = Number(e.target.value).toFixed(2);
+      };
+      $('preview-btn').onclick = async () => {
+        try {
+          renderPreview(await api('/api/rules/preview', { method: 'POST', body: JSON.stringify(formPayload()) }));
+        } catch (e) {
+          showStatus(e.message, 'bad');
+        }
+      };
+      $('save-btn').onclick = async () => {
+        try {
+          if (editingId) {
+            // edit = replace: delete + recreate (topic vectors re-embed from new topics)
+            await api('/rules/' + editingId, { method: 'DELETE' });
+          }
+          const res = await api('/api/rules', { method: 'POST', body: JSON.stringify(formPayload()) });
+          showStatus('rule saved, focus sweep pruned ' + res.pruned + ' page(s)', 'ok');
+          loadForm(null);
+          renderRules().catch(() => {});
+        } catch (e) {
+          showStatus(e.message, 'bad');
+        }
+      };
+      $('clear-btn').onclick = () => loadForm(null);
+
+      // --- blocked tab ---------------------------------------------------------
+      async function renderBlocked() {
+        const box = $('blocked-list');
+        skeletons(box, 2);
+        let data;
+        try {
+          data = await api('/api/blocked');
+        } catch {
+          failInto(box, 'could not load blocked sites. check that recall is running.');
+          return;
+        }
+        box.textContent = '';
+        if (!data.domains.length) {
+          emptyBox(box, [
+            el('span', '', 'no sites blocked. '),
+            el('span', '', 'block one above, or from the extension popup on any page.'),
+          ]);
+          return;
+        }
+        data.domains.forEach((d) => {
+          box.appendChild(
+            trailRow({
+              time: '',
+              title: d.domain,
+              meta: [{ text: d.pages + ' stored page' + (d.pages === 1 ? '' : 's'), cls: '' }],
+              actions: [
+                d.pages > 0
+                  ? miniBtn('Delete pages', 'danger', async () => {
+                      if (!confirmDelete(d.pages + ' stored pages from ' + d.domain)) return;
+                      const res = await api('/pages?domain=' + encodeURIComponent(d.domain), { method: 'DELETE' });
+                      showStatus('deleted ' + res.deleted + ' pages', 'ok');
+                      renderBlocked().catch(() => {});
+                    })
+                  : el('span', 'muted', ''),
+                miniBtn('Unblock', '', async () => {
+                  const cur = await api('/api/blocked');
+                  await api('/api/blocked', {
+                    method: 'PUT',
+                    body: JSON.stringify({
+                      domains: cur.domains.map((x) => x.domain).filter((x) => x !== d.domain),
+                    }),
+                  });
+                  showStatus('unblocked ' + d.domain, 'ok');
+                  renderBlocked().catch(() => {});
+                }),
+              ],
+            })
+          );
+        });
+      }
+      $('block-add').onclick = async function () {
+        const domain = $('block-domain').value.trim();
+        if (!domain) return;
+        this.disabled = true;
+        try {
+          const cur = await api('/api/blocked');
+          const domains = cur.domains.map((d) => d.domain);
+          if (!domains.includes(domain)) domains.push(domain);
+          await api('/api/blocked', { method: 'PUT', body: JSON.stringify({ domains }) });
+          showStatus('blocked ' + domain, 'ok');
+          $('block-domain').value = '';
+          renderBlocked().catch(() => {});
+        } catch (e) {
+          showStatus(e.message, 'bad');
+        } finally {
+          this.disabled = false;
+        }
+      };
+      async function renderAuto() {
+        let data;
+        try {
+          data = await api('/api/filterlist');
+        } catch {
+          const tbody = $('auto-table').querySelector('tbody');
+          const tr = el('tr');
+          const td = el('td', 'muted', 'could not load the auto-ignore list.');
+          td.colSpan = 4;
+          tr.appendChild(td);
+          tbody.textContent = '';
+          tbody.appendChild(tr);
+          return;
+        }
+        const tbody = $('auto-table').querySelector('tbody');
+        tbody.textContent = '';
+        const entries = Object.entries(data.stats).sort((a, b) => b[1].rejected - a[1].rejected);
+        if (!entries.length) {
+          const tr = el('tr');
+          const td = el('td', 'muted', 'nothing yet. sites appear after focus rules start rejecting their pages.');
+          td.colSpan = 4;
+          tr.appendChild(td);
+          tbody.appendChild(tr);
+          return;
+        }
+        const ignored = new Set(data.domains);
+        entries.forEach(([domain, v]) => {
+          const tr = el('tr', ignored.has(domain) ? 'ignored-row' : '');
+          tr.appendChild(el('td', 'mono', domain));
+          tr.appendChild(el('td', '', String(v.rejected)));
+          tr.appendChild(el('td', '', String(v.kept)));
+          const state = el('td');
+          if (ignored.has(domain)) state.appendChild(el('span', 'chip ignored', 'ignored at the source'));
+          else state.appendChild(el('span', 'muted', 'watching'));
+          tr.appendChild(state);
+          tbody.appendChild(tr);
+        });
+      }
+      $('reset-auto').onclick = async function () {
+        if (!window.confirm('Reset auto-ignore memory? Every site starts counting rejections from zero and may be captured again.')) return;
+        await api('/api/filterlist', { method: 'DELETE' });
+        showStatus('auto-ignore memory cleared', 'ok');
+        renderAuto().catch(() => {});
+      };
+
+      // --- settings tab --------------------------------------------------------
+      async function loadRetention() {
+        const settings = await api('/settings');
+        $('retention').value = String(settings.retentionDays);
+        $('retention').dataset.previous = String(settings.retentionDays);
+      }
+      $('retention').onchange = async function (e) {
+        const previous = Number(this.dataset.previous || 0);
+        const next = Number(e.target.value);
+        if (next > 0 && (previous === 0 || next < previous)) {
+          const ok = window.confirm(
+            'Keep pages for ' + (next === 0 ? 'forever' : next + ' days') + '? Pages older than that are deleted at the next hourly sweep.'
+          );
+          if (!ok) {
+            this.value = String(previous);
+            return;
+          }
+        }
+        try {
+          await api('/settings', { method: 'POST', body: JSON.stringify({ retentionDays: next }) });
+          this.dataset.previous = String(next);
+          showStatus('retention saved', 'ok');
+        } catch (err) {
+          showStatus(err.message, 'bad');
+          this.value = String(previous);
+        }
+      };
+      async function loadHealth() {
+        try {
+          const res = await fetch('/health');
+          const h = await res.json();
+          $('health-line').textContent = 'running v' + h.version + ' at 127.0.0.1:8787';
+        } catch {
+          $('health-line').textContent = 'not reachable';
+        }
+      }
+      function extLineText(s) {
+        if (!s.crx || !s.extId) return 'CRX not packed — reinstall builds it';
+        if (s.policyInstalled) return 'force-install policy present (id ' + s.extId.slice(0, 8) + '…)';
+        return 'Chrome force-install policy missing — reinstall re-adds it';
+      }
+      function extHintText(s) {
+        return 'Chrome ≥137 only honors force-install on MDM-managed browsers. If the extension is missing: chrome://extensions → Developer mode → Load unpacked → ' + (s.extPath || '/Users/nick/dev/recall/extension');
+      }
+      async function loadExtension() {
+        const s = await api('/api/extension');
+        $('ext-line').textContent = extLineText(s);
+        $('ext-hint').textContent = extHintText(s);
+        $('ext-hint').hidden = false;
+      }
+      $('ext-reinstall').onclick = async function () {
+        this.disabled = true;
+        this.textContent = 'Reinstalling…';
+        try {
+          const res = await api('/api/extension/reinstall', { method: 'POST' });
+          $('ext-line').textContent = res.sudoCommand ? 'needs admin — run in a terminal: ' + res.sudoCommand : extLineText(res);
+          $('ext-hint').textContent = res.message || extHintText(res);
+          $('ext-hint').hidden = false;
+          showStatus(res.sudoCommand ? 'policy write declined — command shown above' : 'rebuilt', res.sudoCommand ? 'bad' : 'ok');
+        } catch (e) {
+          showStatus(e.message, 'bad');
+        }
+        this.disabled = false;
+        this.textContent = 'Reinstall';
+      };
+
+      // --- tab router: state in the URL, sections load lazily -------------------
+      const TABS = ['search', 'pages', 'focus', 'blocked', 'settings'];
+      const loaded = {};
+      async function ensure(tab) {
+        if (loaded[tab]) return;
+        loaded[tab] = true;
+        try {
+          if (tab === 'search') {
+            // before the first query, the trail of latest captures fills the results area
+            if (!$('results').children.length) {
+              const label = el('p', 'muted', 'Latest captures, newest first');
+              label.style.margin = '0 0 var(--space-xs)';
+              $('results').appendChild(label);
+              await renderRecent(true);
+            }
+          }
+          if (tab === 'pages') {
+            await renderCards();
+            await renderRecent(false);
+          }
+          if (tab === 'focus') await renderRules();
+          if (tab === 'blocked') {
+            await renderBlocked();
+            await renderAuto();
+          }
+          if (tab === 'settings') {
+            await loadRetention();
+            await loadHealth();
+            await loadExtension();
+          }
+        } catch {
+          showStatus('could not load this section. check that recall is running.', 'bad');
+        }
+      }
+      function showTab(name) {
+        if (!TABS.includes(name)) name = 'search';
+        for (const t of TABS) {
+          $('view-' + t).hidden = t !== name;
+          const link = document.querySelector('.tabs a[href="#' + t + '"]');
+          if (t === name) link.setAttribute('aria-current', 'page');
+          else link.removeAttribute('aria-current');
+        }
+        void ensure(name);
+      }
+      window.addEventListener('hashchange', () => showTab(location.hash.slice(1)));
+
+      (async function init() {
+        const boot = await fetch('/bootstrap').then((r) => r.json());
+        token = boot.token;
+        await renderState();
+        showTab(location.hash.slice(1) || 'search');
+      })().catch((e) => {
+        showStatus('could not load data from the server. check that recall is running (npm run dev).', 'bad');
+      });
+    </script>
+  </body>
+</html>

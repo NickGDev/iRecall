@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Recall</title>
+    <meta name="description" content="Capture status, blocklist control and activity for Recall." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Host+Grotesk:wght@400;500&family=Atkinson+Hyperlegible+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* Hallmark · v2.0.0
+       * theme: Console (dealt 3/3) · console: graphite · genre: modern-minimal · shape: app screen
+       * screen: recall popup: page status, block action, live activity
+       * redesign: full · keeps: toggle, stats and logs wiring; storage keys unchanged
+       * pre-emit critique: P5 H4 E4 S4 R4 V4 · weakest: V, first Console build in the log
+       * finish-review: subagent · shared with the dashboard review · 5 findings, this file carried 2, both resolved
+       */
+      :root {
+        color-scheme: dark;
+        --color-paper: oklch(17% 0.008 250);
+        --color-paper-2: oklch(21% 0.009 250);
+        --color-paper-3: oklch(13.5% 0.007 250);
+        --color-ink: oklch(95% 0.005 250);
+        --color-ink-2: oklch(83% 0.008 250);
+        --color-muted: oklch(71% 0.01 250);
+        --color-rule: oklch(31% 0.01 250);
+        --color-rule-2: oklch(42% 0.012 250);
+        --color-accent: oklch(82% 0.15 80);
+        --color-accent-ink: oklch(18% 0.04 75);
+        --color-accent-soft: oklch(29% 0.05 80);
+        --color-focus: oklch(82% 0.15 80);
+        --color-cool: oklch(77% 0.12 245);
+        --color-cool-soft: oklch(29% 0.05 245);
+        --color-ok: oklch(76% 0.15 150);
+        --color-ok-soft: oklch(24.5% 0.03 150);
+        --color-bad: oklch(70% 0.17 25);
+        --color-bad-soft: oklch(24.5% 0.035 25);
+        --font-display: "Host Grotesk", ui-sans-serif, system-ui, sans-serif;
+        --font-body: var(--font-display);
+        --font-outlier: "Atkinson Hyperlegible Mono", ui-monospace, monospace;
+        --radius-card: 10px;
+        --radius-pill: 6px;
+        --rule-hair: 1px;
+        --tracking-display: -0.03em;
+        --dur-micro: 120ms;
+        --dur-short: 220ms;
+        --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+        --space-2xs: 4px;
+        --space-xs: 8px;
+        --space-sm: 12px;
+        --space-md: 16px;
+      }
+      * { box-sizing: border-box; }
+      html, body { overflow-x: clip; }
+      body {
+        /* Fixed width: Chrome sizes the popup window from body width. Keep it
+           a constant — fluid width (width:100% + media query) makes the
+           autosize loop collapse the window narrow. 400 < 800px cap, safe. */
+        width: 400px;
+        margin: 0;
+        padding: var(--space-sm) var(--space-md) var(--space-md);
+        font: 400 14px/1.5 var(--font-body);
+        background: var(--color-paper);
+        color: var(--color-ink);
+      }
+      a {
+        color: var(--color-ink-2);
+        text-decoration: underline;
+        text-decoration-color: var(--color-rule-2);
+        text-underline-offset: 2px;
+      }
+      a:hover { color: var(--color-accent); }
+      :focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+      input:focus-visible { outline-offset: -3px; }
+      ::selection { background: color-mix(in oklab, var(--color-accent) 25%, transparent); }
+      html { scrollbar-color: var(--color-rule-2) var(--color-paper); caret-color: var(--color-accent); }
+
+      .top { display: flex; justify-content: space-between; align-items: center; margin: 0 0 var(--space-sm); }
+      .wordmark { font: 500 15px var(--font-display); letter-spacing: var(--tracking-display); }
+      .pill {
+        font: 500 12px var(--font-body);
+        padding: var(--space-2xs) var(--space-sm);
+        border-radius: var(--radius-pill);
+        border: var(--rule-hair) solid var(--color-rule-2);
+        background: var(--color-paper-2);
+        color: var(--color-ink-2);
+        cursor: pointer;
+        min-height: 28px;
+        transition: background-color var(--dur-micro) var(--ease-out);
+      }
+      .pill.on { background: var(--color-ok-soft); border-color: transparent; color: var(--color-ok); }
+      .pill.off { background: var(--color-bad-soft); border-color: transparent; color: var(--color-bad); }
+      .pill:active { transform: translateY(1px); }
+      .pill:disabled { opacity: 0.55; cursor: not-allowed; }
+
+      .panel {
+        border: var(--rule-hair) solid var(--color-rule);
+        border-radius: var(--radius-card);
+        background: var(--color-paper-2);
+        color: var(--color-ink);
+        padding: var(--space-sm);
+      }
+      .label { font: 500 12px var(--font-body); color: var(--color-muted); margin: 0 0 var(--space-2xs); }
+      .status-line { font: 500 16px var(--font-display); margin: 0; }
+      #page-host {
+        margin: 2px 0 var(--space-sm);
+        font: 400 13px var(--font-outlier);
+        color: var(--color-cool);
+        font-variant-numeric: tabular-nums;
+        overflow-wrap: break-word;
+        min-width: 0;
+      }
+      .actions { display: flex; gap: var(--space-xs); flex-wrap: wrap; }
+      .btn {
+        font: 500 13px var(--font-body);
+        padding: var(--space-2xs) var(--space-sm);
+        border-radius: var(--radius-pill);
+        border: var(--rule-hair) solid var(--color-rule-2);
+        background: var(--color-paper-2);
+        color: var(--color-ink);
+        cursor: pointer;
+        min-height: 32px;
+        transition: background-color var(--dur-micro) var(--ease-out);
+      }
+      .btn:hover { background: var(--color-paper-3); }
+      .btn:active { transform: translateY(1px); }
+      .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+      .btn-primary {
+        background: var(--color-accent);
+        border-color: var(--color-accent);
+        color: var(--color-accent-ink);
+      }
+      .btn-primary:hover { background: color-mix(in oklab, var(--color-accent) 88%, white); }
+      .btn-danger {
+        color: var(--color-bad);
+        border-color: color-mix(in oklab, var(--color-bad) 45%, var(--color-rule));
+        background: transparent;
+      }
+      .btn-danger:hover { background: var(--color-bad-soft); }
+      .hidden { display: none; }
+      .helper { font: 400 12px/1.45 var(--font-body); color: var(--color-muted); margin: var(--space-xs) 0 0; min-height: 1lh; }
+      .helper.warn { color: var(--color-bad); }
+
+      .server-line { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-xs); margin: var(--space-sm) 2px; }
+      #stats {
+        margin: 0;
+        font: 400 13px var(--font-outlier);
+        color: var(--color-muted);
+        font-variant-numeric: tabular-nums;
+        min-width: 0;
+      }
+      #stats .err { color: var(--color-bad); }
+
+      .activity-head { display: flex; justify-content: space-between; align-items: baseline; margin: 0 2px var(--space-xs); }
+      .activity-head .label { margin: 0; }
+      .text-btn {
+        font: 500 12px var(--font-body);
+        color: var(--color-muted);
+        background: none;
+        border: none;
+        padding: var(--space-2xs) var(--space-xs);
+        min-height: 32px;
+        cursor: pointer;
+        border-radius: 4px;
+      }
+      .text-btn:hover { color: var(--color-ink); background: var(--color-paper-3); }
+      .text-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+      #logs {
+        border: var(--rule-hair) solid var(--color-rule);
+        border-radius: var(--radius-card);
+        background: var(--color-paper-3);
+        max-height: 240px;
+        overflow-y: auto;
+      }
+      .log-row {
+        display: grid;
+        grid-template-columns: 44px 64px minmax(0, 1fr);
+        gap: var(--space-xs);
+        padding: var(--space-2xs) var(--space-xs);
+        border-top: var(--rule-hair) solid var(--color-rule);
+        align-items: baseline;
+      }
+      .log-row:first-child { border-top: none; }
+      .log-time { font: 400 11px var(--font-outlier); color: var(--color-cool); font-variant-numeric: tabular-nums; }
+      .log-kind { font: 500 11px var(--font-body); color: var(--color-muted); }
+      .kind-capture { color: var(--color-ok); }
+      .kind-sync { color: var(--color-cool); }
+      .kind-skip { color: var(--color-bad); }
+      .kind-error { color: var(--color-bad); }
+      .log-detail {
+        font: 400 12px var(--font-body);
+        color: var(--color-ink-2);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .empty { color: var(--color-muted); padding: var(--space-sm); text-align: center; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <header class="top">
+      <span class="wordmark">Recall</span>
+      <button id="toggle" class="pill off" type="button">…</button>
+    </header>
+
+    <section class="panel" aria-labelledby="page-label">
+      <h2 class="label" id="page-label">This page</h2>
+      <p class="status-line" id="page-status">Checking…</p>
+      <p id="page-host">…</p>
+      <div class="actions">
+        <button id="block-btn" class="btn" type="button" hidden>Block site</button>
+        <button id="delete-pages-btn" class="btn btn-danger" type="button" hidden>Delete stored pages</button>
+      </div>
+      <p class="helper" id="page-note" role="status" aria-live="polite"></p>
+    </section>
+
+    <div class="server-line">
+      <p id="stats">checking server…</p>
+      <a id="dashboard-link" href="http://127.0.0.1:8787/">Open dashboard</a>
+    </div>
+
+    <section aria-labelledby="activity-label">
+      <div class="activity-head">
+        <h2 class="label" id="activity-label">Activity</h2>
+        <button id="clear-logs" class="text-btn" type="button">clear</button>
+      </div>
+      <div id="logs" role="log" aria-live="polite" aria-label="Capture activity">
+        <div class="empty">no activity yet</div>
+      </div>
+    </section>
+
+    <script src="dist/popup.js" type="module"></script>
+  </body>
+</html>
