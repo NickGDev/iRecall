@@ -50,9 +50,9 @@ cp -R node_modules "$STAGE/server/node_modules"
 # linuxdeploy during AppImage bundling. Keep libonnxruntime + shared/CPU only.
 find "$STAGE/server/node_modules/onnxruntime-node/bin" \
   \( -name '*providers_cuda*' -o -name '*providers_tensorrt*' \) -delete 2>/dev/null || true
-# sharp's musl libvips: dead weight on glibc runtimes (sharp picks the glibc
-# variant itself); the musl ELF also trips linuxdeploy's dep scan.
-find "$STAGE/server/node_modules/@img" -maxdepth 1 -name 'sharp-libvips-linuxmusl-*' \
+# sharp's musl libs (libvips + binding): dead weight on glibc runtimes (sharp
+# picks the glibc variant itself); musl ELFs trip linuxdeploy's dep scan.
+find "$STAGE/server/node_modules/@img" -maxdepth 1 -name '*linuxmusl*' \
   -type d -exec rm -rf {} + 2>/dev/null || true
 cp -R server/dist "$STAGE/server/dist"
 cp -R server/public "$STAGE/server/public"
