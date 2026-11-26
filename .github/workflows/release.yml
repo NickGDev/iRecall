@@ -75,6 +75,8 @@ jobs:
       - name: Regenerate icons (adds icon.ico for the Windows bundler)
         run: npx --yes "@tauri-apps/cli@^2" icon assets/logo.png
       - name: Tauri build
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1" # linuxdeploy/AppImage tooling needs FUSE-less extraction on runners
         run: npx --yes "@tauri-apps/cli@^2" build --bundles ${{ matrix.bundles }}
       - name: Package macOS zip
         if: runner.os == 'macOS'
