@@ -596,6 +596,83 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
     return row ?? null;
   }
 
+  // Passage mode for get_page?q=: FTS decides whether the page matches the
+  // query (tokenization + quoting shared with search); windows are cut in JS
+  // around query-token occurrences because snippet() yields one window and
+  // offsets() are token-indexed, not char-indexed. No match (or operator-only
+  // query) → matched:false with the page head, so callers always get text.
+  const ftsMatchRow = db.prepare(
+    'SELECT 1 FROM pages_fts WHERE pages_fts MATCH ? AND pages_fts.rowid = ?'
+  );
+
+  function extractPassages(content: string, tokens: string[], maxTotal = 4000): string[] {
+    const lower = content.toLowerCase();
+    const hits: number[] = [];
+    for (const t of tokens) {
+      let i = lower.indexOf(t);
+      while (i !== -1) {
+        hits.push(i);
+        i = lower.indexOf(t, i + t.length);
+      }
+    }
+    if (hits.length === 0) return [];
+    hits.sort((a, b) => a - b);
+    // occurrences closer than 400 chars collapse into one window anchor
+    const anchors: number[] = [];
+    for (const h of hits) {
+      const last = anchors[anchors.length - 1]!;
+      if (last === undefined || h - last > 400) anchors.push(h);
+    }
+    const out: string[] = [];
+    let used = 0;
+    for (const a of anchors) {
+      if (used >= maxTotal || out.length >= 3) break;
+      const start = Math.max(0, a - 150);
+      const end = Math.min(content.length, start + 900);
+      out.push((start > 0 ? '…' : '') + content.slice(start, end).trim() + (end < content.length ? '…' : ''));
+      used += end - start;
+    }
+    return out;
+  }
+
+  function getPagePassages(
+    id: number,
+    q: string,
+    row: NonNullable<ReturnType<typeof getPage>>
+  ): {
+    mode: 'passages';
+    id: number;
+    url: string;
+    domain: string;
+    title: string | null;
+    capturedAt: number;
+    dwellMs: number;
+    matched: boolean;
+    passages: string[];
+    totalChars: number;
+  } {
+    const base = {
+      mode: 'passages' as const,
+      id: row.id,
+      url: row.url,
+      domain: row.domain,
+      title: row.title,
+      capturedAt: row.capturedAt,
+      dwellMs: row.dwellMs,
+    };
+    const match = ftsQuery(q);
+    const hit = match !== '' && ftsMatchRow.get(match, id);
+    const tokens = [...new Set(q.toLowerCase().split(/\W+/).filter((t) => t.length > 1))];
+    const found = hit ? extractPassages(row.content, tokens) : [];
+    const passages = found.length > 0 ? found : [row.content.slice(0, 4000) + (row.content.length > 4000 ? '…' : '')];
+    return {
+      ...base,
+      matched: found.length > 0,
+      passages,
+      totalChars: passages.reduce((n, p) => n + p.length, 0),
+    };
+  }
+
   // --- deletes + retention -----------------------------------------------------
 
   const deleteById = db.prepare('DELETE FROM pages WHERE id = ?');
@@ -1109,6 +1186,7 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
     stats,
     recent,
     getPage,
+    getPagePassages,
     annotate,
     deletePage,
     deletePages,

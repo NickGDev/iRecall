@@ -64,12 +64,39 @@ const got = store.getPage(hits[0]!.id);
 assert(got !== null && got.content.includes('SQLite FTS5') && got.url === pageA.url, 'getPage returns full page');
 assert(store.getPage(999_999) === null, 'getPage missing id -> null');
 
+// passage mode: q cuts windows around query tokens; no match falls back to head
+store.ingest([
+  {
+    url: 'https://example.com/long-doc',
+    title: 'Long Document',
+    content:
+      'ALPHAMARK intro sentence. ' +
+      'filler sentence about plumbing. '.repeat(160) +
+      'OMEGASECTION: quilting bobbins and seam allowances. '.repeat(6),
+  },
+]);
+const longHits = await store.search({ q: 'quilting bobbins', mode: 'keyword' });
+assert(longHits.length === 1, 'long doc searchable');
+const longFull = store.getPage(longHits[0]!.id)!;
+assert(longFull.content.includes('ALPHAMARK'), 'getPage full row unchanged');
+const pass = store.getPagePassages(longHits[0]!.id, 'quilting bobbins', longFull);
+assert(pass.matched === true, 'passage match detected');
+assert(pass.passages[0]!.includes('bobbins'), 'passage window hits target section');
+assert(!pass.passages[0]!.includes('ALPHAMARK'), 'passage excludes distant head');
+assert(pass.totalChars < 4500, 'passage budget respected');
+const miss = store.getPagePassages(longHits[0]!.id, 'zzznomatchword', longFull);
+assert(miss.matched === false && miss.passages[0]!.includes('ALPHAMARK'), 'no match falls back to page head');
+const ops = store.getPagePassages(longHits[0]!.id, 'OR AND NOT', longFull);
+assert(ops.matched === false, 'operator-literal query no match, no throw');
+const quoted = store.getPagePassages(longHits[0]!.id, '"', longFull);
+assert(quoted.matched === false, 'quote-only query head fallback, no throw');
+
 await store.flushEmbeddings();
 const none = await store.search({ q: 'zzz-no-such-token', mode: 'keyword' });
 assert(none.length === 0, 'keyword no-match -> empty');
 
 const s = store.stats();
-assert(s.pages === 2 && s.embedded === 2, 'stats counts incl embeddings');
+assert(s.pages === 3 && s.embedded === 3, 'stats counts incl embeddings');
 
 // temporal: superseded + stale + decay
 const old = Date.now() - 120 * 86_400_000;
@@ -91,7 +118,7 @@ const kw = await store.search({ q: 'pancakes', mode: 'keyword' });
 assert(kw.length === 0, 'deleted page gone from fts');
 const docId = v2hits[0]!.id;
 assert(store.deletePage(docId) === 1, 'id delete works');
-assert(store.stats().embedded === 2, 'vector rows cascade-deleted');
+assert(store.stats().embedded === 3, 'vector rows cascade-deleted');
 
 // purge-all path (dashboard 'all' sends olderThanDays=0): must delete everything
 store.ingest([{ url: 'https://left.io/x', title: 'leftover', content: 'leftover content page. '.repeat(20), capturedAt: Date.now() - 5000 }]);

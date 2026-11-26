@@ -310,7 +310,8 @@ app.get('/pages/:id', (c) => {
   if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'bad id' }, 400);
   const page = store.getPage(id);
   if (!page) return c.json({ error: 'not found' }, 404);
-  return c.json(page);
+  const q = c.req.query('q');
+  return q && q.trim() !== '' ? c.json(store.getPagePassages(id, q, page)) : c.json(page);
 });
 
 app.delete('/pages/:id', (c) => {
