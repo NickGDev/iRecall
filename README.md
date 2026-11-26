@@ -197,6 +197,8 @@ Chrome ext (MV3, force-installed)   Local server (127.0.0.1:8787, LaunchAgent)
 6. Enrichment worker (summaries, tags, sensitive-content classification —
    idle-time, async); PDF path (byte extraction, OCR fallback for scans) —
    no continuous OCR, ever.
+7. Deferred: `sqliteai/sqlite-vector` SIMD scan swap — revisit at >50k
+   vectors or when search latency bites (scalar-fn leg fine at personal scale).
 
 </details>
 
