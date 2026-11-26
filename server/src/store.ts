@@ -504,7 +504,13 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
     let vecRows: { pageId: number; distance: number }[] = [];
     try {
       const queryVec = await embedText(params.q);
-      vecRows = searchVec(queryVec, limit * 2);
+      // Relevance floor: granite puts unrelated pages at 0.72-0.75 cosine
+      // similarity (store.ts:153), so distance >= 0.85 (similarity <= 0.15)
+      // is noise — KNN still returns k nearest for any query, and without a
+      // floor those orthogonal rows flood the merged set and surface as
+      // confident-looking garbage under domain/time filters. Embedder-specific
+      // constant: re-tune if EMBED_MODEL ever changes.
+      vecRows = searchVec(queryVec, limit * 2).filter((r) => r.distance < 0.85);
     } catch (err) {
       // model unavailable or vec query failed: keyword results still returned
       console.error('vector search skipped:', err instanceof Error ? err.message : err);
@@ -648,6 +654,7 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
     capturedAt: number;
     dwellMs: number;
     matched: boolean;
+    windowed: boolean; // windows cut from content tokens (false = head fallback)
     passages: string[];
     totalChars: number;
   } {
@@ -673,6 +680,7 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
     return {
       ...base,
       matched: !!hit,
+      windowed: found.length > 0,
       passages,
       totalChars: passages.reduce((n, p) => n + p.length, 0),
     };

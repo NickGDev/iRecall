@@ -13,8 +13,9 @@ const DAY = 86_400_000;
 interface EvalQuery {
   note: string;
   q: string;
-  expect?: string; // url must appear in top-k
+  expect?: string; // url must appear in top-5
   expectTop?: string; // url must be rank 1
+  expectNone?: boolean; // query+filters must return zero hits
   expectTitle?: string; // disambiguate same-url versions (V1/V2)
   expectStale?: boolean; // the expected hit's stale flag must equal this
   mode?: 'keyword' | 'hybrid';
@@ -25,12 +26,22 @@ interface EvalQuery {
 
 const U = (slug: string) => `https://eval.${slug.replace(/-/g, '')}.test/${slug}`;
 
-function page(slug: string, tokens: string, repeats = 12): PageInput {
+// Narrow shape for corpus construction — PageInput fields are `unknown`
+// (validation happens in store.normalize), and the token-disjointness guard
+// below needs string access.
+interface EvalPage {
+  url: string;
+  title: string;
+  content: string;
+  capturedAt?: number;
+}
+
+function page(slug: string, tokens: string, repeats = 12): EvalPage {
   return { url: U(slug), title: slug, content: `${tokens} `.repeat(repeats) };
 }
 
 export function buildCorpus(now: number): PageInput[] {
-  return [
+  const corpus: EvalPage[] = [
     page('sqlite-notes', 'sqlite fts5 bm25 wal checkpoint journal'),
     page('react-hooks', 'react hooks rerender effect memo dependency'),
     page('rust-async', 'rust async await pin future executor'),
@@ -85,6 +96,21 @@ export function buildCorpus(now: number): PageInput[] {
         'GAMMA origami crane folding precision. '.repeat(6),
     },
   ];
+  // Load-bearing fixture property: the 18 single-topic pages must not share
+  // tokens, or queries silently lose their sole-match guarantee. (The manual
+  // V1/V2 and changelog A/B pairs intentionally overlap; long-essay is
+  // self-contained.) Fail loudly on future fixture edits that break this.
+  const seen = new Map<string, string>();
+  for (const p of corpus.slice(0, 18)) {
+    for (const t of new Set(p.content.toLowerCase().split(/\W+/).filter((x) => x.length > 1))) {
+      const owner = seen.get(t);
+      if (owner !== undefined && owner !== p.url) {
+        throw new Error(`eval corpus token '${t}' shared by ${owner} and ${p.url}`);
+      }
+      seen.set(t, p.url);
+    }
+  }
+  return corpus;
 }
 
 const QUERIES: EvalQuery[] = [
@@ -97,20 +123,29 @@ const QUERIES: EvalQuery[] = [
   { note: 'exact posture', q: 'posture', expectTop: U('taichi') },
   { note: 'two-term watercolor', q: 'watercolor pigment', expectTop: U('watercolor') },
   { note: 'two-term sourdough', q: 'sourdough hydration', expectTop: U('sourdough') },
-  // scattered multi-token: all tokens only co-occur in target
-  { note: 'scattered sqlite', q: 'sqlite fts5 bm25 wal checkpoint journal', expect: U('sqlite-notes') },
-  { note: 'scattered react', q: 'react hooks rerender effect memo dependency', expect: U('react-hooks') },
-  { note: 'scattered rust', q: 'rust async await pin future executor', expect: U('rust-async') },
-  { note: 'scattered dns', q: 'homelab dns pihole resolver upstream cache', expect: U('homelab-dns') },
-  { note: 'scattered mcp', q: 'mcp protocol stdio tools transport schema', expect: U('mcp-spec') },
-  { note: 'scattered vector', q: 'vectordb embeddings cosine ann recall quantization', expect: U('vector-notes') },
-  { note: 'scattered k8s', q: 'kubernetes pod node scheduler affinity', expect: U('k8s-basics') },
-  { note: 'scattered api', q: 'api rate limit retry backoff quota', expect: U('api-notes') },
-  // keyword vs hybrid parity: same target lands in top-5 both modes
-  { note: 'parity keyword', q: 'compost mulch worms', mode: 'keyword', expect: U('gardening') },
-  { note: 'parity hybrid', q: 'compost mulch worms', mode: 'hybrid', expect: U('gardening') },
-  { note: 'parity keyword 2', q: 'grinder extraction', mode: 'keyword', expect: U('coffee-roast') },
-  { note: 'parity hybrid 2', q: 'grinder extraction', mode: 'hybrid', expect: U('coffee-roast') },
+  // scattered multi-token: all tokens only co-occur in target — sole lexical
+  // match, equal freshness, so rank 1 is deterministic (tightened from top-5
+  // per eval review: top-5 passed even with a 2× inverted decay)
+  { note: 'scattered sqlite', q: 'sqlite fts5 bm25 wal checkpoint journal', expectTop: U('sqlite-notes') },
+  { note: 'scattered react', q: 'react hooks rerender effect memo dependency', expectTop: U('react-hooks') },
+  { note: 'scattered rust', q: 'rust async await pin future executor', expectTop: U('rust-async') },
+  { note: 'scattered dns', q: 'homelab dns pihole resolver upstream cache', expectTop: U('homelab-dns') },
+  { note: 'scattered mcp', q: 'mcp protocol stdio tools transport schema', expectTop: U('mcp-spec') },
+  { note: 'scattered vector', q: 'vectordb embeddings cosine ann recall quantization', expectTop: U('vector-notes') },
+  { note: 'scattered k8s', q: 'kubernetes pod node scheduler affinity', expectTop: U('k8s-basics') },
+  { note: 'scattered api', q: 'api rate limit retry backoff quota', expectTop: U('api-notes') },
+  // fusion discrimination: NO page contains all three tokens, so the FTS leg
+  // (implicit AND) returns zero rows and the vector KNN must carry the query
+  // — fails if searchVec dies into the keyword fallback or fusion drops a leg
+  { note: 'fusion vec-only rescue', q: 'derailleur cable espresso', expectTop: U('bike-fix') },
+  // fusion discrimination mirror: both tokens in V1, only 'calibration' in V2
+  // — lexical overlap favors V1, time decay must hand rank 1 to fresh V2
+  { note: 'decay beats lexical', q: 'widgets calibration', expectTop: U('manual'), expectTitle: 'manual V2', expectStale: false },
+  // keyword vs hybrid parity: same target rank 1 in both modes
+  { note: 'parity keyword', q: 'compost mulch worms', mode: 'keyword', expectTop: U('gardening') },
+  { note: 'parity hybrid', q: 'compost mulch worms', mode: 'hybrid', expectTop: U('gardening') },
+  { note: 'parity keyword 2', q: 'grinder extraction', mode: 'keyword', expectTop: U('coffee-roast') },
+  { note: 'parity hybrid 2', q: 'grinder extraction', mode: 'hybrid', expectTop: U('coffee-roast') },
   // temporal: superseded V1 flagged stale — keyword mode, since FTS matches
   // V1 exclusively ('widgets' only in V1) while hybrid's time decay rightly
   // buries a 120d-old capture under fresh pages
@@ -119,13 +154,18 @@ const QUERIES: EvalQuery[] = [
   // window/domain queries need `now` — see dynamicQueries
 ];
 
-// time-window + domain-filter cases; built at runtime for epoch math
+// time-window + domain-filter cases; built at runtime for epoch math.
+// expectTop (not top-5) so dropping the WHERE cond fails: unfiltered, the
+// fresher sibling takes rank 1. Negative companions catch the meta conds
+// being dropped on the vector leg (hits that should not exist at all).
 function dynamicQueries(now: number): EvalQuery[] {
   return [
-    { note: 'window until -5d', q: 'release notes', until: now - 5 * DAY, expect: U('changelog-10d') },
-    { note: 'window since -5d', q: 'release notes', since: now - 5 * DAY, expect: U('changelog-1d') },
-    { note: 'domain filter', q: 'calibration procedure', domain: 'eval.manual.test', expect: U('manual') },
-    { note: 'since recent api', q: 'api rate limit', since: now - 2 * DAY, expect: U('api-notes') },
+    { note: 'window until -5d', q: 'release notes', until: now - 5 * DAY, expectTop: U('changelog-10d') },
+    { note: 'window since -5d', q: 'release notes', since: now - 5 * DAY, expectTop: U('changelog-1d') },
+    { note: 'domain filter', q: 'calibration procedure', domain: 'eval.manual.test', expectTop: U('manual') },
+    { note: 'since recent api', q: 'api rate limit', since: now - 2 * DAY, expectTop: U('api-notes') },
+    { note: 'filter negative domain', q: 'derailleur', domain: 'eval.manual.test', expectNone: true },
+    { note: 'filter negative since', q: 'widgets', since: now - DAY, expectNone: true },
   ];
 }
 
@@ -159,13 +199,18 @@ export async function runEval(now: number, embedText: EmbedFn): Promise<EvalResu
   const lines: string[] = [];
   const failures: string[] = [];
   let passed = 0;
+  const seenNotes = new Set<string>();
   const check = (ok: boolean, note: string, detail: string) => {
     lines.push(`${ok ? 'ok' : 'FAIL'}: eval ${note} (${detail})`);
+    // sub-checks suffix their base note ("... stale flag", "... version") —
+    // strip back to the base so coverage tracking sees one note per query
+    seenNotes.add(note.replace(/ (stale flag|version)$/, ''));
     if (ok) passed++;
     else failures.push(note);
   };
 
   for (const eq of [...QUERIES, ...dynamicQueries(now)]) {
+    seenNotes.add(eq.note);
     const hits = await store.search({
       q: eq.q,
       mode: eq.mode,
@@ -174,9 +219,16 @@ export async function runEval(now: number, embedText: EmbedFn): Promise<EvalResu
       until: eq.until,
       limit: 10,
     });
+    if (eq.expectNone) {
+      check(hits.length === 0, eq.note, `hits=${hits.length}`);
+      continue;
+    }
     const top = hits[0];
     if (eq.expectTop !== undefined) {
       check(top?.url === eq.expectTop, eq.note, `top=${top?.url ?? 'none'}`);
+      if (eq.expectTitle !== undefined && top) {
+        check(top.title === eq.expectTitle, `${eq.note} version`, `title=${top.title}`);
+      }
       if (eq.expectStale !== undefined && top) {
         check(top.stale === eq.expectStale, `${eq.note} stale flag`, `stale=${top.stale}`);
       }
@@ -194,6 +246,25 @@ export async function runEval(now: number, embedText: EmbedFn): Promise<EvalResu
     }
   }
 
+  // a page hit by both legs must appear exactly once in the merged result
+  const dupHits = await store.search({ q: 'sqlite fts5 bm25', limit: 10 });
+  check(new Set(dupHits.map((h) => h.id)).size === dupHits.length, 'hybrid no duplicate ids', `${dupHits.length} hits`);
+
+  // vector-leg outage at search time: query embedding throws → hybrid must
+  // still answer via the keyword leg (flush-time failures are covered in
+  // selfcheck; this is the query-time catch-and-fallback path). The query
+  // must have a real FTS match — the fusion-rescue query has none, so a
+  // keyword-only fallback would legitimately return zero there.
+  const outageStore = createStore(':memory:', async (text: string) => {
+    if (text === 'derailleur cable tension') throw new Error('query embed outage');
+    return embedText(text);
+  });
+  outageStore.ingest(buildCorpus(now));
+  await outageStore.flushEmbeddings();
+  const outageHits = await outageStore.search({ q: 'derailleur cable tension', mode: 'hybrid', limit: 10 });
+  check(outageHits.length > 0, 'vec outage falls back to keyword', `${outageHits.length} hits`);
+  outageStore.close();
+
   for (const pq of PASSAGE_QUERIES) {
     const hits = await store.search({ q: pq.findQ, mode: 'keyword', limit: 5 });
     const row = hits.length > 0 ? store.getPage(hits[0]!.id) : null;
@@ -209,6 +280,19 @@ export async function runEval(now: number, embedText: EmbedFn): Promise<EvalResu
   }
 
   store.close();
+  // verdict coverage (F5): every registered query/check must have produced at
+  // least one verdict — a typo'd query field would otherwise run silently and
+  // pass as part of "all pass"
+  const expectedNotes = new Set([
+    ...QUERIES.map((q) => q.note),
+    ...dynamicQueries(now).map((q) => q.note),
+    ...PASSAGE_QUERIES.map((q) => q.note),
+    'hybrid no duplicate ids',
+    'vec outage falls back to keyword',
+  ]);
+  for (const n of expectedNotes) {
+    if (!seenNotes.has(n)) failures.push(`no verdict for: ${n}`);
+  }
   const total = passed + failures.length;
   return { total, passed, failures, lines };
 }
