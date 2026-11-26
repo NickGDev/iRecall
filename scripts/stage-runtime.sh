@@ -45,10 +45,11 @@ echo "-- server tree (prod node_modules; repo node_modules untouched)"
 cp package.json "$STAGE/server/"
 cp -R node_modules "$STAGE/server/node_modules"
 (cd "$STAGE/server" && npm prune --omit=dev --no-fund --no-audit)
-# GPU-only CUDA provider: never loaded for CPU inference, hundreds of MB of
-# bloat in every bundle, and its ELF kills linuxdeploy during AppImage
-# bundling (CI tree ships it; older local installs may not).
-find "$STAGE/server/node_modules/onnxruntime-node/bin" -name 'libonnxruntime_providers_cuda*' -delete 2>/dev/null || true
+# GPU-only execution providers (CUDA, TensorRT): never loaded for CPU
+# inference, hundreds of MB of bloat in every bundle, and their ELFs kill
+# linuxdeploy during AppImage bundling. Keep libonnxruntime + shared/CPU only.
+find "$STAGE/server/node_modules/onnxruntime-node/bin" \
+  \( -name '*providers_cuda*' -o -name '*providers_tensorrt*' \) -delete 2>/dev/null || true
 cp -R server/dist "$STAGE/server/dist"
 cp -R server/public "$STAGE/server/public"
 cp -R server/models "$STAGE/server/models"
