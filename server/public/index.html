@@ -162,7 +162,7 @@
 
       .label { font: 500 13px var(--font-body); color: var(--color-muted); display: block; margin: 0 0 var(--space-2xs); }
       .field { margin: 0 0 var(--space-md); }
-      input[type="text"], textarea, select {
+      input[type="text"], input[type="date"], input[type="number"], textarea, select {
         font: 400 15px var(--font-body);
         color: var(--color-ink);
         background: var(--color-paper-3);
@@ -260,6 +260,28 @@
       .mini:disabled { opacity: 0.55; cursor: not-allowed; }
       .mini.danger { color: var(--color-bad); border-color: color-mix(in oklab, var(--color-bad) 40%, var(--color-rule)); }
       .mini.danger:hover { background: var(--color-bad-soft); color: var(--color-bad); }
+
+      /* day rail (Pages tab): capture-day pills, date jump, paged trails */
+      .dayrail-row { display: flex; gap: var(--space-xs); align-items: center; flex-wrap: wrap; margin: 0 0 var(--space-md); }
+      .dayrail { display: flex; gap: var(--space-2xs); flex-wrap: wrap; flex: 1 1 420px; min-width: 0; }
+      .daypill {
+        font: 500 12px var(--font-outlier);
+        font-variant-numeric: tabular-nums;
+        padding: 2px var(--space-xs);
+        min-height: 26px;
+        border-radius: 4px;
+        border: var(--rule-hair) solid var(--color-rule);
+        background: var(--color-paper-2);
+        color: var(--color-ink-2);
+        cursor: pointer;
+      }
+      .daypill:hover { background: var(--color-paper-3); color: var(--color-ink); }
+      .daypill[aria-current="date"] { background: var(--color-cool-soft); color: var(--color-cool); border-color: var(--color-rule-2); }
+      .daypill .n { color: var(--color-muted); margin-left: 5px; }
+      .dayrail-row input[type="date"] { width: auto; flex: 0 0 auto; }
+      .more-row { margin: var(--space-sm) 0 0; }
+      .chip.rule-chip { background: var(--color-bad-soft); color: var(--color-bad); border-color: transparent; }
+      .chip.inert-chip { background: var(--color-paper-3); color: var(--color-muted); }
       @media (max-width: 640px) {
         .trail-row { grid-template-columns: 1fr; gap: var(--space-2xs); }
         .trail-actions { justify-content: flex-start; }
@@ -403,9 +425,47 @@
         <h2 class="tab-head">The record</h2>
         <p class="tab-intro">Everything stored right now. Deleting here is permanent.</p>
         <div class="panels" id="cards"></div>
-        <div class="section">
+        <p class="muted measured" id="sweep-line" style="margin: var(--space-sm) 0 0" hidden></p>
+        <div class="section" id="day-sec">
+          <h2 class="tab-head">By day</h2>
+          <div class="dayrail-row">
+            <div class="dayrail" id="day-rail"></div>
+            <input type="date" id="day-pick" aria-label="Jump to a date" />
+          </div>
+          <div class="panel trail" id="day-view"></div>
+          <div class="row more-row"><button id="day-more" class="btn" hidden type="button">show 50 more</button></div>
+        </div>
+        <div class="section" id="recent-sec">
           <h2 class="tab-head">Latest captures</h2>
           <div class="panel trail" id="recent"></div>
+        </div>
+        <div class="section" id="site-sec" hidden>
+          <h2 class="tab-head" id="site-head">Site</h2>
+          <p class="tab-intro">Every stored capture from this site, newest first. One row per capture — rows marked superseded are older versions.</p>
+          <div class="row" style="margin: 0 0 var(--space-md)">
+            <button id="site-rule-btn" class="btn" type="button">Auto-delete site…</button>
+          </div>
+          <div class="panel trail" id="site-view"></div>
+          <div class="row more-row"><button id="site-more" class="btn" hidden type="button">show 50 more</button></div>
+        </div>
+        <div class="panel" id="ret-form" style="padding: var(--space-md); margin-top: var(--space-lg)" hidden>
+          <h3 class="tab-head" id="ret-title" style="font-size: 17px">Auto-delete</h3>
+          <p class="muted" id="ret-scope" style="margin: 0 0 var(--space-sm)"></p>
+          <div class="field row">
+            <label class="label" for="ret-mode" style="flex-basis: 100%">Delete pages…</label>
+            <select id="ret-mode" style="width: auto">
+              <option value="maxAge">older than</option>
+              <option value="on">on date</option>
+            </select>
+            <input type="number" id="ret-days" min="1" max="3650" value="30" style="width: 110px" aria-label="Days old" />
+            <span class="muted" id="ret-days-unit">days old</span>
+            <input type="date" id="ret-date" aria-label="Delete on date" hidden />
+          </div>
+          <div class="row">
+            <button id="ret-create" class="btn btn-primary" type="button">Create rule</button>
+            <button id="ret-cancel" class="btn" type="button">Cancel</button>
+          </div>
+          <p class="muted" id="ret-preview" style="margin: var(--space-sm) 0 0"></p>
         </div>
         <div class="section">
           <h2 class="tab-head">Delete data</h2>
@@ -560,6 +620,15 @@
             <button id="ext-reinstall" class="btn" type="button">Reinstall</button>
           </div>
         </div>
+        <div class="section">
+          <h2 class="tab-head">Auto-delete rules</h2>
+          <p class="tab-intro">
+            Pages and sites with their own retention. Rules only shorten the global window above;
+            the hourly sweep enforces them, or a tick within 30s of a change. There is no undo.
+          </p>
+          <p class="muted measured" id="ret-status" style="margin: 0 0 var(--space-sm)"></p>
+          <div class="panel" id="ret-list"></div>
+        </div>
       </section>
     </main>
 
@@ -665,7 +734,17 @@
         }
         if (opts.meta && opts.meta.length) {
           const meta = el('div', 'trail-meta');
-          for (const m of opts.meta) meta.appendChild(el('span', m.cls || '', m.text));
+          for (const m of opts.meta) {
+            if (m.href) {
+              const a = document.createElement('a');
+              a.className = m.cls || '';
+              a.href = m.href;
+              a.textContent = m.text;
+              meta.appendChild(a);
+            } else {
+              meta.appendChild(el('span', m.cls || '', m.text));
+            }
+          }
           body.appendChild(meta);
         }
         if (opts.snippet) body.appendChild(el('div', 'snippet', opts.snippet));
@@ -755,7 +834,7 @@
         }
         const trail = el('div', 'panel trail');
         hits.forEach((hit) => {
-          const meta = [{ text: hit.domain, cls: 'dom' }, { text: fmtAge(hit.ageDays) }];
+          const meta = [{ text: hit.domain, cls: 'dom', href: '#site/' + hit.domain }, { text: fmtAge(hit.ageDays) }];
           if (hit.category) meta.push({ text: hit.category, cls: 'chip' });
           if (typeof hit.score === 'number') meta.push({ text: Math.round(hit.score * 100) + '%', cls: 'chip score' });
           if (hit.supersededBy) meta.push({ text: 'superseded by #' + hit.supersededBy, cls: '' });
@@ -836,6 +915,313 @@
         add('db size', (stats.dbBytes / 1048576).toFixed(1) + ' MB');
       }
 
+      // --- pages tab: day rail, day/site views, retention rules ----------------
+      const PAGE_SIZE = 50;
+      let curDay = null;
+      let curSite = '';
+      let dayOffset = 0;
+      let siteOffset = 0;
+      let retentionRules = null; // cached rule list for row badge chips
+
+      async function rulesForBadges() {
+        if (retentionRules === null) {
+          try {
+            retentionRules = (await api('/api/retention')).rules;
+          } catch {
+            retentionRules = [];
+          }
+        }
+        return retentionRules;
+      }
+      function ruleHit(page) {
+        // chip shows whichever rule covers the row; the sweep applies the
+        // earliest cutoff anyway (most aggressive wins)
+        const rules = retentionRules || [];
+        return rules.find((r) =>
+          r.scope === 'page' ? r.key === page.url : page.domain === r.key || page.domain.endsWith('.' + r.key)
+        );
+      }
+      function describeRuleShort(r) {
+        if (r.inert) return 'auto-delete (inert)';
+        return r.mode === 'on'
+          ? 'auto-delete ' + new Date(r.value).toLocaleDateString([], { month: 'short', day: 'numeric' })
+          : 'auto-delete ' + r.value + 'd';
+      }
+      function badgeMeta(page) {
+        const r = ruleHit(page);
+        return r ? { text: describeRuleShort(r), cls: 'chip ' + (r.inert ? 'inert-chip' : 'rule-chip') } : null;
+      }
+      function openRetForm(scope, key, label) {
+        $('ret-title').textContent = scope === 'page' ? 'Auto-delete this page' : 'Auto-delete this site';
+        $('ret-scope').textContent = label;
+        $('ret-form').dataset.scope = scope;
+        $('ret-form').dataset.key = key;
+        $('ret-preview').textContent = '';
+        $('ret-form').hidden = false;
+        $('ret-form').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+      function fmtClock(t) {
+        return new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      }
+      function fmtDayPill(day) {
+        return new Date(day + 'T12:00:00').toLocaleDateString([], { month: 'short', day: 'numeric' });
+      }
+      function pageRow(page, opts) {
+        const meta = [];
+        if (opts.showDomain) meta.push({ text: page.domain, cls: 'dom', href: '#site/' + page.domain });
+        meta.push({ text: fmtAge(page.ageDays) });
+        if (page.supersededBy) meta.push({ text: 'superseded by #' + page.supersededBy, cls: '' });
+        else if (page.stale) meta.push({ text: 'stale', cls: '' });
+        const badge = badgeMeta(page);
+        if (badge) meta.push(badge);
+        return trailRow({
+          time: opts.time,
+          href: page.url,
+          title: page.title || page.domain,
+          meta,
+          actions: [
+            miniBtn('Auto-delete…', '', () => openRetForm('page', page.url, page.title || page.url)),
+            miniBtn('Delete', 'danger', async () => {
+              if (!confirmDelete('this page (' + (page.title || page.domain) + ')')) return;
+              await api('/pages/' + page.id, { method: 'DELETE' });
+              showStatus('page deleted', 'ok');
+              opts.rerender();
+              renderCards().catch(() => {});
+              renderRail().catch(() => {});
+            }),
+          ],
+        });
+      }
+
+      async function renderRail() {
+        const rail = $('day-rail');
+        let data;
+        try {
+          data = await api('/days?limit=60');
+        } catch {
+          rail.textContent = '';
+          return;
+        }
+        rail.textContent = '';
+        if (!data.days.length) {
+          rail.appendChild(el('span', 'muted', 'no captures yet — browse with the extension and days appear here.'));
+          return;
+        }
+        for (const d of data.days) {
+          const b = el('button', 'daypill');
+          b.type = 'button';
+          b.dataset.day = d.day;
+          b.append(el('span', '', fmtDayPill(d.day)), el('span', 'n', String(d.count)));
+          b.onclick = () => {
+            location.hash = '#pages/' + d.day;
+          };
+          rail.appendChild(b);
+        }
+        markRailCurrent();
+      }
+      function markRailCurrent() {
+        for (const b of $('day-rail').querySelectorAll('.daypill')) {
+          if (curDay && b.dataset.day === curDay) b.setAttribute('aria-current', 'date');
+          else b.removeAttribute('aria-current');
+        }
+      }
+      async function loadDayView(append) {
+        const box = $('day-view');
+        if (!curDay) return;
+        if (!append) {
+          dayOffset = 0;
+          skeletons(box, 3);
+        }
+        let data;
+        try {
+          data = await api('/pages?day=' + curDay + '&limit=' + PAGE_SIZE + '&offset=' + dayOffset);
+        } catch (e) {
+          failInto(box, e.message);
+          return;
+        }
+        await rulesForBadges();
+        if (!append) box.textContent = '';
+        if (!data.total) {
+          emptyBox(box, [el('span', '', 'nothing captured on ' + fmtDayPill(curDay) + '.')]);
+        } else {
+          for (const p of data.pages) {
+            box.appendChild(pageRow(p, { time: fmtClock(p.capturedAt), showDomain: true, rerender: () => loadDayView(false) }));
+          }
+        }
+        dayOffset += data.pages.length;
+        $('day-more').hidden = dayOffset >= data.total;
+      }
+      async function loadSiteView(append) {
+        const box = $('site-view');
+        if (!append) {
+          siteOffset = 0;
+          skeletons(box, 3);
+        }
+        let data;
+        try {
+          data = await api('/pages?domain=' + encodeURIComponent(curSite) + '&limit=' + PAGE_SIZE + '&offset=' + siteOffset);
+        } catch (e) {
+          failInto(box, e.message);
+          return;
+        }
+        await rulesForBadges();
+        if (!append) box.textContent = '';
+        if (!data.total) {
+          emptyBox(box, [el('span', '', 'nothing stored from ' + curSite + '.')]);
+        } else {
+          for (const p of data.pages) {
+            box.appendChild(
+              pageRow(p, {
+                time:
+                  new Date(p.capturedAt).toLocaleDateString([], { month: 'short', day: 'numeric' }) +
+                  '|' +
+                  fmtClock(p.capturedAt),
+                showDomain: true,
+                rerender: () => loadSiteView(false),
+              })
+            );
+          }
+        }
+        siteOffset += data.pages.length;
+        $('site-more').hidden = siteOffset >= data.total;
+      }
+      // Route the pages tab by hash: #pages, #pages/<date>, #site/<domain>.
+      function applyPagesView() {
+        const h = location.hash.slice(1);
+        const slash = h.indexOf('/');
+        const head = slash === -1 ? h : h.slice(0, slash);
+        const sub = slash === -1 ? '' : h.slice(slash + 1);
+        curSite = head === 'site' ? decodeURIComponent(sub) : '';
+        curDay = head === 'pages' && sub ? sub : null;
+        $('site-sec').hidden = !curSite;
+        $('day-sec').hidden = !!curSite;
+        $('recent-sec').hidden = !!curSite;
+        if (curSite) {
+          $('site-head').textContent = curSite;
+          loadSiteView(false).catch(() => {});
+          return;
+        }
+        markRailCurrent();
+        if (curDay) loadDayView(false).catch(() => {});
+        else emptyBox($('day-view'), [el('span', '', 'pick a day above to see everything captured then.')]);
+      }
+
+      // --- retention rules (form + settings overview + sweep status line) ------
+      $('ret-mode').onchange = function () {
+        const on = this.value === 'on';
+        $('ret-days').hidden = on;
+        $('ret-days-unit').hidden = on;
+        $('ret-date').hidden = !on;
+      };
+      $('ret-cancel').onclick = () => {
+        $('ret-form').hidden = true;
+      };
+      $('ret-create').onclick = async function () {
+        const form = $('ret-form');
+        const body = { scope: form.dataset.scope, key: form.dataset.key, mode: $('ret-mode').value };
+        if (body.mode === 'maxAge') {
+          body.value = Math.floor(Number($('ret-days').value));
+          if (!(body.value >= 1 && body.value <= 3650)) {
+            showStatus('max age must be 1–3650 days', 'bad');
+            return;
+          }
+        } else {
+          const d = $('ret-date').value;
+          if (!d) {
+            showStatus('pick a date', 'bad');
+            return;
+          }
+          body.value = new Date(d + 'T00:00:00').getTime(); // local midnight starting the chosen date
+        }
+        this.disabled = true;
+        try {
+          // preview returns the match count without saving — the destructive
+          // preview the confirm below guards (rules have no undo)
+          const preview = await api('/api/retention', { method: 'POST', body: JSON.stringify({ ...body, preview: true }) });
+          if (preview.matches > 0 && !confirmDelete(preview.matches + ' stored page(s) under this rule')) {
+            this.disabled = false;
+            return;
+          }
+          await api('/api/retention', { method: 'POST', body: JSON.stringify(body) });
+          showStatus('auto-delete rule saved' + (preview.matches > 0 ? ' — the sweep applies it within 30s' : ''), 'ok');
+          form.hidden = true;
+          retentionRules = null;
+          applyPagesView(); // re-render the current view so badge chips appear
+        } catch (e) {
+          showStatus(e.message, 'bad');
+        }
+        this.disabled = false;
+      };
+      $('site-rule-btn').onclick = () => openRetForm('site', curSite, curSite);
+      $('day-pick').onchange = function () {
+        if (this.value) location.hash = '#pages/' + this.value;
+      };
+      $('day-more').onclick = () => loadDayView(true);
+      $('site-more').onclick = () => loadSiteView(true);
+
+      function sweepLineText(lastSweep) {
+        if (!lastSweep) return 'no auto-delete sweep yet (hourly, or within 30s of a rule change).';
+        return (
+          'last auto-delete sweep: ' +
+          lastSweep.deleted +
+          ' page(s), ' +
+          new Date(lastSweep.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+        );
+      }
+      function describeRule(r) {
+        if (r.inert) return 'inert — global retention is shorter';
+        return r.mode === 'on'
+          ? 'auto-delete on ' + new Date(r.value).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
+          : 'auto-delete after ' + r.value + 'd';
+      }
+      function retRuleCard(r) {
+        const card = el('div', 'rule-card');
+        const head = el('div', 'rule-head');
+        head.appendChild(el('span', 'rule-scope', (r.scope === 'page' ? 'page: ' : 'site: ') + r.key));
+        const badges = el('span', '');
+        badges.appendChild(el('span', 'badge ' + (r.inert ? 'off' : 'on'), describeRule(r)));
+        head.appendChild(badges);
+        card.appendChild(head);
+        card.appendChild(el('div', 'kv', r.matches + ' stored page(s) match · ' + r.deleted + ' deleted so far'));
+        const actions = el('div', 'row');
+        actions.appendChild(
+          miniBtn('delete rule', 'danger', async () => {
+            if (!window.confirm('Delete this rule? Pages already stored are kept; only future auto-deletion stops.')) return;
+            await api('/api/retention/' + r.id, { method: 'DELETE' });
+            showStatus('rule deleted', 'ok');
+            retentionRules = null;
+            renderRetention().catch(() => {});
+          })
+        );
+        card.appendChild(actions);
+        return card;
+      }
+      async function renderRetention() {
+        let data;
+        try {
+          data = await api('/api/retention');
+        } catch {
+          failInto($('ret-list'), 'could not load auto-delete rules.');
+          return;
+        }
+        retentionRules = data.rules;
+        const line = sweepLineText(data.lastSweep);
+        $('ret-status').textContent = line;
+        const sweepLine = $('sweep-line');
+        sweepLine.hidden = data.rules.length === 0;
+        sweepLine.textContent = line;
+        const box = $('ret-list');
+        box.textContent = '';
+        if (!data.rules.length) {
+          emptyBox(box, [
+            el('span', '', 'no auto-delete rules. '),
+            el('span', '', 'create one from any page row ("Auto-delete…") or from a site view on the Pages tab.'),
+          ]);
+          return;
+        }
+        for (const r of data.rules) box.appendChild(retRuleCard(r));
+      }
+
       async function renderRecent() {
         const box = $('recent');
         let rows;
@@ -845,6 +1231,7 @@
           failInto(box, 'could not load recent pages. check that iRecall is running.');
           return;
         }
+        await rulesForBadges();
         box.textContent = '';
         if (!rows.pages.length) {
           emptyBox(box, [
@@ -855,23 +1242,13 @@
         }
         rows.pages.forEach((page) => {
           box.appendChild(
-            trailRow({
+            pageRow(page, {
               time:
                 new Date(page.capturedAt).toLocaleDateString([], { month: 'short', day: 'numeric' }) +
                 '|' +
-                new Date(page.capturedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              href: page.url,
-              title: page.title || page.domain,
-              meta: [{ text: page.domain, cls: 'dom' }],
-              actions: [
-                miniBtn('Delete', 'danger', async () => {
-                  if (!confirmDelete('this page (' + (page.title || page.domain) + ')')) return;
-                  await api('/pages/' + page.id, { method: 'DELETE' });
-                  showStatus('page deleted', 'ok');
-                  renderRecent().catch(() => {});
-                  renderCards().catch(() => {});
-                }),
-              ],
+                fmtClock(page.capturedAt),
+              showDomain: true,
+              rerender: () => renderRecent().catch(() => {}),
             })
           );
         });
@@ -1099,7 +1476,7 @@
         try {
           if (editingId) {
             // edit = replace: delete + recreate (topic vectors re-embed from new topics)
-            await api('/rules/' + editingId, { method: 'DELETE' });
+            await api('/api/rules/' + editingId, { method: 'DELETE' });
           }
           const res = await api('/api/rules', { method: 'POST', body: JSON.stringify(formPayload()) });
           showStatus('rule saved, focus sweep pruned ' + res.pruned + ' page(s)', 'ok');
@@ -1314,7 +1691,9 @@
           }
           if (tab === 'pages') {
             await renderCards();
+            await renderRail();
             await renderRecent();
+            await renderRetention();
           }
           if (tab === 'focus') {
             await renderRules();
@@ -1328,6 +1707,7 @@
             await loadRetention();
             await loadHealth();
             await loadExtension();
+            await renderRetention();
           }
         } catch {
           showStatus('could not load this section. check that iRecall is running.', 'bad');
@@ -1343,13 +1723,21 @@
         }
         void ensure(name);
       }
-      window.addEventListener('hashchange', () => showTab(location.hash.slice(1)));
+      // Hash router: #pages/<date> and #site/<domain> ride the pages tab.
+      function route() {
+        const h = location.hash.slice(1);
+        const head = h.indexOf('/') === -1 ? h : h.slice(0, h.indexOf('/'));
+        const tab = TABS.includes(head) ? head : 'search';
+        showTab(tab);
+        if (tab === 'pages') applyPagesView();
+      }
+      window.addEventListener('hashchange', route);
 
       (async function init() {
         const boot = await fetch('/bootstrap').then((r) => r.json());
         token = boot.token;
         await renderState();
-        showTab(location.hash.slice(1) || 'search');
+        route();
       })().catch((e) => {
         showStatus('could not load data from the server. check that iRecall is running (npm run dev).', 'bad');
       });

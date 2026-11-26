@@ -158,6 +158,18 @@ export interface Exemplar {
 // upgrade = per-exemplar weight if teaching precision ever needs it.
 const EXEMPLAR_THRESHOLD = 0.85;
 
+// A per-page or per-site auto-delete rule (see the retention-rules section in
+// createStore). Lives in the settings KV as JSON; never a table.
+export interface RetentionRule {
+  id: number;
+  scope: 'page' | 'site';
+  key: string; // page: full URL; site: bare domain
+  mode: 'on' | 'maxAge';
+  value: number; // on: epoch-ms cutoff (local midnight of the chosen date); maxAge: days 1-3650
+  createdAt: number;
+  deleted: number; // lifetime pages this rule has deleted
+}
+
 function sha256(s: string): string {
   return createHash('sha256').update(s).digest('hex');
 }
@@ -588,6 +600,49 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
     return annotate(rows.map((r) => ({ ...r, snippet: '', rank: 0 })));
   }
 
+  // Capture-day buckets for the Pages tab day rail: local-timezone days that
+  // have captures, newest first. Zero-capture days never appear — the rail is
+  // a table of contents of the record, not a calendar. This SQL is the one
+  // authority on "a day"; the UTC url_day_hash stays dedup-only.
+  function days(limit: number): { day: string; count: number }[] {
+    return db
+      .prepare(
+        `SELECT date(captured_at/1000,'unixepoch','localtime') AS day, COUNT(*) AS count
+         FROM pages GROUP BY day ORDER BY day DESC LIMIT ?`
+      )
+      .all(limit) as { day: string; count: number }[];
+  }
+
+  // Paged listing for the day view and the site drill-down: same annotated rows
+  // as recent(), newest first, www-tolerant domain match like the search filter.
+  // day and domain AND together when both are given.
+  function listPages(opts: { day?: string; domain?: string; limit: number; offset: number }): {
+    pages: SearchHit[];
+    total: number;
+  } {
+    const conds: string[] = [];
+    const args: (string | number)[] = [];
+    if (opts.day) {
+      conds.push("date(p.captured_at/1000,'unixepoch','localtime') = ?");
+      args.push(opts.day);
+    }
+    if (opts.domain) {
+      const bare = opts.domain.replace(/^www\./, '');
+      conds.push("(p.domain = ? OR p.domain = 'www.' || ?)");
+      args.push(bare, bare);
+    }
+    const where = conds.length > 0 ? 'WHERE ' + conds.join(' AND ') : '';
+    const total = (db.prepare(`SELECT COUNT(*) AS n FROM pages p ${where}`).get(...args) as { n: number }).n;
+    const rows = db
+      .prepare(
+        `SELECT p.id, p.url, p.domain, p.title, p.captured_at AS capturedAt, p.dwell_ms AS dwellMs
+         FROM pages p ${where}
+         ORDER BY p.captured_at DESC LIMIT ? OFFSET ?`
+      )
+      .all(...args, opts.limit, opts.offset) as Parameters<typeof annotate>[0];
+    return { pages: annotate(rows.map((r) => ({ ...r, snippet: '', rank: 0 }))), total };
+  }
+
   function getPage(id: number):
     | (Omit<SearchHit, 'rank' | 'snippet' | 'ageDays' | 'supersededBy' | 'stale'> & {
         content: string;
@@ -692,19 +747,32 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
   // --- deletes + retention -----------------------------------------------------
 
   const deleteById = db.prepare('DELETE FROM pages WHERE id = ?');
-  const deleteByDomain = db.prepare('DELETE FROM pages WHERE domain = ?');
   const deleteOlderThan = db.prepare('DELETE FROM pages WHERE captured_at < ?');
 
   function deletePage(id: number): number {
     return deleteById.run(id).changes;
   }
 
-  function deletePages(opts: { domain?: string; olderThanDays?: number }): number {
-    if (opts.domain) return deleteByDomain.run(opts.domain).changes;
-    if (opts.olderThanDays !== undefined) {
-      return deleteOlderThan.run(Date.now() - opts.olderThanDays * 86_400_000).changes;
+  // AND-combines whatever filters are provided so "apply this rule now"
+  // composes existing surface (?url= alone, ?domain=&olderThanDays= together);
+  // single-filter calls keep the old behavior.
+  function deletePages(opts: { domain?: string; url?: string; olderThanDays?: number }): number {
+    const conds: string[] = [];
+    const args: (string | number)[] = [];
+    if (opts.url) {
+      conds.push('url = ?');
+      args.push(opts.url);
     }
-    return 0;
+    if (opts.domain) {
+      conds.push('domain = ?');
+      args.push(opts.domain);
+    }
+    if (opts.olderThanDays !== undefined) {
+      conds.push('captured_at < ?');
+      args.push(Date.now() - opts.olderThanDays * 86_400_000);
+    }
+    if (conds.length === 0) return 0;
+    return db.prepare(`DELETE FROM pages WHERE ${conds.join(' AND ')}`).run(...args).changes;
   }
 
   // Per-domain stored-page counts, for the blocklist UI ("also delete N pages").
@@ -737,6 +805,101 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
     const days = getRetention();
     if (days <= 0) return 0;
     return deleteOlderThan.run(Date.now() - days * 86_400_000).changes;
+  }
+
+  // --- retention rules (per-page / per-site auto-delete) -----------------------
+  // Rules live in the settings KV (blocked_domains precedent) as a JSON array:
+  // handful-scale user config, no blobs, no per-row PATCH — not worth a table.
+  // Scope 'page' keys the exact URL (covers all versions + future re-captures
+  // of that URL; tracking-param variants are a known ceiling — a site rule is
+  // the broad answer). Scope 'site' keys a domain and matches subdomains, same
+  // as focus rules. Rules only ever shorten retention: a maxAge at or beyond
+  // the global retentionDays is inert (the global purge deletes first).
+  // (RetentionRule interface exported at module top.)
+  function listRetentionRules(): RetentionRule[] {
+    const raw = getSetting('retention_rules');
+    if (!raw) return [];
+    try {
+      const arr = JSON.parse(raw) as unknown;
+      if (!Array.isArray(arr)) return [];
+      return arr.filter(
+        (r): r is RetentionRule =>
+          !!r &&
+          typeof r === 'object' &&
+          typeof (r as RetentionRule).id === 'number' &&
+          ((r as RetentionRule).scope === 'page' || (r as RetentionRule).scope === 'site') &&
+          typeof (r as RetentionRule).key === 'string' &&
+          ((r as RetentionRule).mode === 'on' || (r as RetentionRule).mode === 'maxAge') &&
+          typeof (r as RetentionRule).value === 'number'
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  function saveRetentionRules(rules: RetentionRule[]): void {
+    setSetting('retention_rules', JSON.stringify(rules));
+  }
+
+  function addRetentionRule(
+    input: Pick<RetentionRule, 'scope' | 'key' | 'mode' | 'value'>
+  ): RetentionRule {
+    const rules = listRetentionRules();
+    const rule: RetentionRule = {
+      id: rules.reduce((m, r) => Math.max(m, r.id), 0) + 1,
+      ...input,
+      createdAt: Date.now(),
+      deleted: 0,
+    };
+    rules.push(rule);
+    saveRetentionRules(rules);
+    return rule;
+  }
+
+  function deleteRetentionRule(id: number): boolean {
+    const rules = listRetentionRules();
+    const next = rules.filter((r) => r.id !== id);
+    if (next.length === rules.length) return false;
+    saveRetentionRules(next);
+    return true;
+  }
+
+  // SQL for a rule's page scope. Site keys match the bare domain + subdomains;
+  // LIKE needs no escaping (keys are validated domains, no % or _).
+  function retentionScope(rule: Pick<RetentionRule, 'scope' | 'key'>): { cond: string; args: string[] } {
+    return rule.scope === 'page'
+      ? { cond: 'url = ?', args: [rule.key] }
+      : { cond: '(domain = ? OR domain LIKE ?)', args: [rule.key, '%.' + rule.key] };
+  }
+
+  function retentionRuleMatches(rule: Pick<RetentionRule, 'scope' | 'key'>): number {
+    const { cond, args } = retentionScope(rule);
+    return (db.prepare(`SELECT COUNT(*) AS n FROM pages WHERE ${cond}`).get(...args) as { n: number }).n;
+  }
+
+  // One enforcement pass. Each rule independently deletes what it covers (the
+  // union is "most aggressive wins"), gated on now for 'on' rules so a future
+  // date never deletes early. Inert maxAge rules (>= global retentionDays) are
+  // skipped — the global purge already deletes those pages.
+  function applyRetentionRules(now: number): number {
+    const rules = listRetentionRules();
+    const globalDays = getRetention();
+    let total = 0;
+    for (const rule of rules) {
+      if (rule.mode === 'maxAge' && globalDays > 0 && rule.value >= globalDays) continue;
+      if (rule.mode === 'on' && now < rule.value) continue;
+      const { cond, args } = retentionScope(rule);
+      const cutoff = rule.mode === 'on' ? rule.value : now - rule.value * 86_400_000;
+      const changes = db
+        .prepare(`DELETE FROM pages WHERE ${cond} AND captured_at < ?`)
+        .run(...args, cutoff).changes;
+      if (changes > 0) {
+        total += changes;
+        rule.deleted += changes;
+      }
+    }
+    if (total > 0) saveRetentionRules(rules);
+    return total;
   }
 
   // --- focus rules (semantic auto-prune) --------------------------------------
@@ -1210,6 +1373,13 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
     getRetention,
     setRetention,
     purgeExpired,
+    days,
+    listPages,
+    listRetentionRules,
+    addRetentionRule,
+    deleteRetentionRule,
+    retentionRuleMatches,
+    applyRetentionRules,
     getSetting,
     setSetting,
     drainBatch,

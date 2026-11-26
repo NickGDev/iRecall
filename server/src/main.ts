@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Context, Next } from 'hono';
-import { createStore, type PageInput } from './store.js';
+import { createStore, type PageInput, type RetentionRule } from './store.js';
 import { earlyFilter, setFocusCriteria, warmup as juliaWarmup, maybeUnload as juliaMaybeUnload } from './julia.js';
 import { embedOne } from './embeddings.js';
 
@@ -303,6 +303,24 @@ app.get('/recent', (c) => {
 
 app.get('/stats', (c) => c.json(store.stats()));
 
+// --- browse (Pages tab): day buckets + paged day/site listings --------------------
+
+app.get('/days', (c) => {
+  const limit = Math.min(Math.max(Number(c.req.query('limit')) || 60, 1), 200);
+  return c.json({ days: store.days(limit) });
+});
+
+app.get('/pages', (c) => {
+  const day = c.req.query('day') || undefined;
+  const domain = c.req.query('domain') || undefined;
+  if (day && !/^\d{4}-\d{2}-\d{2}$/.test(day)) return c.json({ error: 'day must be YYYY-MM-DD' }, 400);
+  if (!day && !domain) return c.json({ error: 'day or domain required' }, 400);
+  const limit = Math.min(Math.max(Number(c.req.query('limit')) || 50, 1), 200);
+  const offset = finiteParam(c.req.query('offset')) ?? 0;
+  if (offset === null || offset < 0) return c.json({ error: 'offset must be a non-negative number' }, 400);
+  return c.json(store.listPages({ day, domain, limit, offset }));
+});
+
 // --- data management (review + delete) -------------------------------------------
 
 app.get('/pages/:id', (c) => {
@@ -321,11 +339,14 @@ app.delete('/pages/:id', (c) => {
 });
 
 app.delete('/pages', (c) => {
-  const domain = c.req.query('domain');
+  const domain = c.req.query('domain') || undefined;
+  const url = c.req.query('url') || undefined;
   const olderThanDays = finiteParam(c.req.query('olderThanDays'));
   if (olderThanDays === null) return c.json({ error: 'olderThanDays must be a number' }, 400);
-  if (!domain && olderThanDays === undefined) return c.json({ error: 'domain or olderThanDays required' }, 400);
-  return c.json({ deleted: store.deletePages({ domain, olderThanDays }) });
+  if (!domain && !url && olderThanDays === undefined) {
+    return c.json({ error: 'domain, url or olderThanDays required' }, 400);
+  }
+  return c.json({ deleted: store.deletePages({ domain, url, olderThanDays }) });
 });
 
 app.get('/settings', (c) => c.json({ retentionDays: store.getRetention() }));
@@ -531,6 +552,86 @@ app.put('/api/blocked', async (c) => {
   return c.json({ domains: blockedWithCounts() });
 });
 
+// --- retention rules API (per-page / per-site auto-delete) -------------------------
+// Rules only shorten the global retention window; the idle tick applies them
+// (hourly purge sweep, or within one 30s tick after a rule changes). There is
+// no undo: the match count a preview returns is the destructive preview.
+
+function ruleWithMeta(rule: RetentionRule) {
+  const globalDays = store.getRetention();
+  return {
+    ...rule,
+    matches: store.retentionRuleMatches(rule),
+    // a maxAge rule the global purge beats never deletes anything — label it
+    inert: rule.mode === 'maxAge' && globalDays > 0 && rule.value >= globalDays,
+  };
+}
+
+app.get('/api/retention', (c) => {
+  let lastSweep: { at: number; deleted: number } | null = null;
+  const raw = store.getSetting('retention_last_sweep');
+  if (raw) {
+    try {
+      lastSweep = JSON.parse(raw) as { at: number; deleted: number };
+    } catch {
+      // unreadable: treat as no sweep yet
+    }
+  }
+  return c.json({ rules: store.listRetentionRules().map(ruleWithMeta), lastSweep });
+});
+
+app.post('/api/retention', async (c) => {
+  const body = await c.req
+    .json<{ scope?: unknown; key?: unknown; mode?: unknown; value?: unknown; preview?: unknown }>()
+    .catch(() => null);
+  if (!body) return c.json({ error: 'invalid json' }, 400);
+  const scope = body.scope === 'page' || body.scope === 'site' ? body.scope : null;
+  const mode = body.mode === 'on' || body.mode === 'maxAge' ? body.mode : null;
+  if (!scope || !mode || typeof body.key !== 'string' || body.key === '' || typeof body.value !== 'number' || !Number.isFinite(body.value)) {
+    return c.json({ error: 'scope page|site, key string, mode on|maxAge, value number required' }, 400);
+  }
+  let key: string;
+  if (scope === 'page') {
+    // exact URL copied from the row — covers all versions + future re-captures
+    // of that URL; variants (tracking params) need a site rule
+    let parsed: URL;
+    try {
+      parsed = new URL(body.key);
+    } catch {
+      return c.json({ error: 'page key must be an http(s) URL' }, 400);
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return c.json({ error: 'page key must be an http(s) URL' }, 400);
+    }
+    key = body.key;
+  } else {
+    const norm = normalizeDomain(body.key);
+    if (!norm) return c.json({ error: 'site key must be a domain like example.com' }, 400);
+    key = norm;
+  }
+  const value =
+    mode === 'on'
+      ? Math.floor(body.value) // epoch ms
+      : Math.min(Math.max(Math.floor(body.value), 1), 3650);
+  if (mode === 'on' && value <= 0) return c.json({ error: 'on: epoch-ms cutoff required' }, 400);
+  // preview: validate + count only, nothing saved — the UI confirms against
+  // this count before the real POST (matches the no-undo delete semantics)
+  if (body.preview === true) {
+    return c.json({ matches: store.retentionRuleMatches({ scope, key }) });
+  }
+  const rule = store.addRetentionRule({ scope, key, mode, value });
+  retentionSweepDue = true;
+  return c.json({ rule: ruleWithMeta(rule) });
+});
+
+app.delete('/api/retention/:id', (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'bad id' }, 400);
+  const deleted = store.deleteRetentionRule(id);
+  if (deleted) retentionSweepDue = true; // deleting a rule deletes no pages — the tick just refreshes the status line
+  return c.json({ deleted });
+});
+
 // --- extension reinstall ----------------------------------------------------------
 // Chrome force-installs the extension via a machine-level policy pointing at
 // updates.xml on this server. Removing the extension in Chrome sticks only when
@@ -620,6 +721,7 @@ const BREAKER_TRIP = 3; // consecutive failed slices → suspend
 const BREAKER_COOLDOWN_MS = 10 * 60 * 1000;
 
 let sweepDue = false; // rule changes jump the queue past the 6h sweep timer
+let retentionSweepDue = false; // retention-rule changes jump the queue past the hourly purge timer
 let failStreak = 0;
 let suspendUntil = 0;
 let lastSweepAt = 0;
@@ -678,10 +780,15 @@ setInterval(() => {
         if (pruned > 0) console.log(`focus sweep: ${pruned} pages pruned`);
         return;
       }
-      if (now - lastPurgeAt >= PURGE_EVERY_MS) {
+      if (retentionSweepDue || now - lastPurgeAt >= PURGE_EVERY_MS) {
+        retentionSweepDue = false;
         lastPurgeAt = now;
         const purged = store.purgeExpired();
+        const autoDeleted = store.applyRetentionRules(now);
+        // the dashboard status line reads this — one write per sweep, cheap
+        store.setSetting('retention_last_sweep', JSON.stringify({ at: now, deleted: autoDeleted }));
         if (purged > 0) console.log(`retention purge: ${purged} pages removed`);
+        if (autoDeleted > 0) console.log(`retention rules: ${autoDeleted} pages removed`);
       }
     } catch (err) {
       failStreak++;

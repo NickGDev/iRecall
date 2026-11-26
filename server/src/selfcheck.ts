@@ -331,6 +331,68 @@ store2.close();
 
 store.close();
 
+// --- pages browse: day buckets + paged listing + retention rules --------------
+// Hermetic store; day strings derived the same way the runner's local clock
+// does (SQLite 'localtime' == JS Date local) so the check is TZ-independent.
+const store3 = createStore(':memory:', fakeEmbed);
+const localDay = (t: number) => {
+  const d = new Date(t);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+};
+// Anchor at local noon: captures never sit near a midnight boundary, so
+// bucket membership can't flip if the check runs across midnight.
+const noon = new Date();
+noon.setHours(12, 0, 0, 0);
+const base = noon.getTime();
+const t2 = base - 2 * 86_400_000;
+const t2b = t2 + 3_600_000;
+const t1 = base - 86_400_000;
+store3.ingest([
+  { url: 'https://a.test/one', title: 'one', content: 'alpha content page one. '.repeat(15), capturedAt: t2 },
+  { url: 'https://a.test/two', title: 'two', content: 'alpha content page two. '.repeat(15), capturedAt: t2b },
+  { url: 'https://www.b.test/x', title: 'x', content: 'beta content page x. '.repeat(15), capturedAt: t1 },
+  { url: 'https://sub.b.test/y', title: 'y', content: 'beta content page y. '.repeat(15), capturedAt: base },
+]);
+const buckets = store3.days(60);
+assert(buckets.length === 3, 'days lists capture-days only (no padding)');
+assert(buckets[0]!.day === localDay(base) && buckets[0]!.count === 1, 'days newest first, count right');
+assert(buckets[2]!.day === localDay(t2) && buckets[2]!.count === 2, 'older day bucketed with both captures');
+const dayRows = store3.listPages({ day: localDay(t2), limit: 50, offset: 0 });
+assert(dayRows.total === 2 && dayRows.pages[0]!.capturedAt === t2b, 'day listing newest first, total right');
+assert(typeof dayRows.pages[0]!.ageDays === 'number' && 'stale' in dayRows.pages[0]!, 'day listing annotated');
+assert(store3.listPages({ domain: 'b.test', limit: 50, offset: 0 }).total === 1, 'site listing exact+www only (no subdomains)');
+assert(store3.listPages({ domain: 'www.b.test', limit: 50, offset: 0 }).total === 1, 'site listing www-tolerant');
+const paged = store3.listPages({ domain: 'a.test', limit: 1, offset: 1 });
+assert(paged.total === 2 && paged.pages.length === 1 && paged.pages[0]!.capturedAt === t2, 'offset paging walks the day');
+
+// retention rules: matches, sweep, most-aggressive-wins, future gate, inert
+const siteRule = store3.addRetentionRule({ scope: 'site', key: 'a.test', mode: 'maxAge', value: 1 });
+assert(store3.retentionRuleMatches(siteRule) === 2, 'site rule matches bare domain');
+const deleted = store3.applyRetentionRules(base);
+assert(deleted === 2 && store3.stats().pages === 2, 'maxAge site rule deletes only aged matches');
+const pageList = store3.listRetentionRules();
+assert(pageList.find((r) => r.id === siteRule.id)?.deleted === 2, 'rule tracks lifetime deletions');
+const futureRule = store3.addRetentionRule({ scope: 'page', key: 'https://sub.b.test/y', mode: 'on', value: base + 86_400_000 });
+assert(store3.applyRetentionRules(base) === 0 && store3.stats().pages === 2, 'future delete-on rule deletes nothing early');
+assert(store3.applyRetentionRules(base + 2 * 86_400_000) === 1, 'delete-on rule fires once its date passes');
+store3.setRetention(30);
+const inertRule = store3.addRetentionRule({ scope: 'site', key: 'b.test', mode: 'maxAge', value: 90 });
+assert(store3.retentionRuleMatches(inertRule) === 1, 'inert rule still reports its match count');
+assert(store3.applyRetentionRules(Date.now()) === 0, 'inert rule (maxAge >= global retention) deletes nothing');
+assert(store3.deleteRetentionRule(futureRule.id) === true, 'retention rule delete works');
+assert(store3.deleteRetentionRule(999) === false, 'retention rule delete unknown id -> false');
+
+// DELETE /pages combos: domain+olderThanDays AND together; ?url= alone works
+store3.ingest([
+  { url: 'https://c.test/old', title: 'old', content: 'gamma old page. '.repeat(15), capturedAt: base - 10 * 86_400_000 },
+  { url: 'https://c.test/new', title: 'new', content: 'gamma new page. '.repeat(15) },
+]);
+assert(store3.deletePages({ domain: 'c.test', olderThanDays: 5 }) === 1, 'domain+olderThanDays AND-combo');
+assert(store3.deletePages({ url: 'https://c.test/new' }) === 1, 'url-scoped delete');
+assert(store3.stats().pages === 1, 'only the untouched page survives the combos');
+store3.close();
+
 // golden-query eval: corpus + queries with known right pages (see
 // eval-queries.ts). Hermetic — fake embedder — so it measures the search
 // mechanism, not granite quality.
