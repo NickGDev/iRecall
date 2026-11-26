@@ -184,7 +184,10 @@ assert(store.stats().embedded === 8, 'vector rows cascade-deleted');
 
 // domain filter www-tolerance: users type the bare domain, captures store
 // the full host (linkedin.com vs www.linkedin.com was a zero-hit trap)
-store.ingest([{ url: 'https://www.example-x.com/post', title: 'x post', content: 'example-x www tolerance capture. '.repeat(20) }]);
+// capturedAt in the past: undated fixtures stamp Date.now() at ingest, and the
+// purge cutoff below can land on the same millisecond — captured_at < cutoff
+// is false on equality, so the row survives the purge-all assert.
+store.ingest([{ url: 'https://www.example-x.com/post', title: 'x post', content: 'example-x www tolerance capture. '.repeat(20), capturedAt: Date.now() - 5000 }]);
 await store.flushEmbeddings();
 const wwwHits = await store.search({ q: 'www tolerance capture', domain: 'example-x.com' });
 assert(wwwHits.length === 1 && wwwHits[0]!.domain === 'www.example-x.com', 'domain filter www-tolerant (bare input)');
