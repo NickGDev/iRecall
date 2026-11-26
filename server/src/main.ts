@@ -271,11 +271,25 @@ app.get('/search', async (c) => {
   const since = finiteParam(c.req.query('since'));
   const until = finiteParam(c.req.query('until'));
   const limit = c.req.query('limit') ? Number(c.req.query('limit')) : 20;
-  if (since === null || until === null || !Number.isFinite(limit)) {
-    return c.json({ error: 'since/until/limit must be numbers' }, 400);
+  const minScore = finiteParam(c.req.query('minScore'));
+  const categoryId = finiteParam(c.req.query('category'));
+  if (since === null || until === null || minScore === null || categoryId === null || !Number.isFinite(limit)) {
+    return c.json({ error: 'since/until/limit/minScore/category must be numbers' }, 400);
   }
   const mode = c.req.query('mode') === 'keyword' ? 'keyword' : 'hybrid';
-  const hits = await store.search({ q, domain, since, until, limit, mode });
+  const hits = await store.search({
+    q,
+    domain,
+    since,
+    until,
+    limit,
+    mode,
+    // minScore cuts on the normalized score (0..1, top hit = 1), never raw
+    // rank — hybrid RRF ranks are ~0.001-0.03 and an absolute cutoff zeroes
+    // them out. category = focus-rule id (see store.ts categorize()).
+    minScore: minScore === undefined ? undefined : Math.min(Math.max(minScore, 0), 1),
+    categoryId: categoryId === undefined ? undefined : Math.floor(categoryId),
+  });
   return c.json({ hits });
 });
 

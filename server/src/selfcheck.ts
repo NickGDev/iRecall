@@ -156,6 +156,25 @@ const swept = await store2.sweepFocusRules();
 assert(swept + store2.focusPruned() === 2 && store2.stats().pages === 4, 'focus sweep prunes stored off-focus page, keyword boost keeps');
 const preview = await store2.previewFocusRule({ domain: 'reddit.com', topics: ['pancake recipe breakfast'], keywords: [], threshold: 0.35 });
 assert(preview.wouldPrune === 2 && preview.kept === 0 && preview.undecided === 0, 'preview flags off-focus stored pages with scores');
+
+// confidence + category: score normalized per result set (top = 1), category
+// derived from the rule's topic vectors, filters applied post-scoring
+const scored = await store2.search({ q: 'llm models machine learning' });
+assert(scored.length > 0 && scored[0]!.score === 1, 'top hit confidence = 1');
+assert(scored.every((h, i) => i === 0 || h.score <= scored[i - 1]!.score), 'scores non-increasing');
+const kwScored = await store2.search({ q: 'llm models machine learning', mode: 'keyword' });
+assert(kwScored.length > 0 && kwScored[0]!.score === 1, 'top hit confidence = 1 (keyword mode too)');
+const llm = scored.find((h) => h.url.includes('comments/1'));
+assert(llm !== undefined && llm.categoryId === rid && llm.category !== null, 'rule-matching page categorized');
+const pancake = scored.find((h) => h.url.includes('comments/2'));
+assert(pancake === undefined || pancake.categoryId === null, 'off-topic page uncategorized');
+const byCat = await store2.search({ q: 'llm models machine learning', categoryId: rid });
+assert(byCat.length >= 1 && byCat.every((h) => h.categoryId === rid), 'category filter keeps only rule-matching');
+const tight = await store2.search({ q: 'llm models machine learning', minScore: 0.98 });
+assert(tight.length >= 1 && tight.every((h) => h.score >= 0.98), 'minScore cuts on normalized score');
+const loose = await store2.search({ q: 'llm models machine learning', minScore: 0.5 });
+assert(loose.length >= tight.length, 'looser minScore keeps at least as many');
+
 assert(store2.deleteFocusRule(rid) === 1, 'focus rule delete works');
 
 // keyword gate word boundaries: "rag" hits the standalone token, not the

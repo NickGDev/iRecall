@@ -24,6 +24,11 @@ export interface SearchParams {
   until?: number;
   limit?: number;
   mode?: 'keyword' | 'hybrid';
+  // Post-scoring filters (dashboard): minScore compares against the per-query
+  // normalized `score` (0..1, top hit = 1), never raw rank — hybrid RRF ranks
+  // are ~0.001-0.03 and an absolute cutoff would zero them out.
+  minScore?: number;
+  categoryId?: number; // focus-rule id: keep only hits that rule categorizes
 }
 
 export interface SearchHit {
@@ -38,6 +43,18 @@ export interface SearchHit {
   ageDays: number;
   supersededBy: number | null;
   stale: boolean;
+}
+
+// A search hit with confidence + category (the two fields `recent()` shares
+// SearchHit for — it gets neither, since both are meaningless outside a query).
+export interface ScoredHit extends SearchHit {
+  // rank normalized to the result set: rank/maxRank, so the top hit is always
+  // 1 and keyword (bm25-derived) and hybrid (RRF) share one comparable scale.
+  score: number;
+  // Best matching enabled focus rule: its first topic as the label, or null
+  // when no rule's topic vectors clear the rule threshold for this page.
+  category: string | null;
+  categoryId: number | null;
 }
 
 export interface Stats {
@@ -301,6 +318,21 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
     return out.sort((a, b) => b.rank - a.rank);
   }
 
+  // Normalize rank to the result set: top hit = 1, rest proportional. Runs
+  // AFTER annotate (decay is per-hit; normalizing pre-decay would diverge from
+  // the returned order) and outside annotate — recent() shares annotate and
+  // must keep raw rank semantics. Gives keyword (bm25-derived) and hybrid
+  // (RRF) modes one comparable confidence scale for the min-score filter.
+  function withScores(hits: SearchHit[]): ScoredHit[] {
+    const max = Math.max(0, ...hits.map((h) => h.rank));
+    return hits.map((h) => ({
+      ...h,
+      score: max > 0 ? Math.round((h.rank / max) * 1000) / 1000 : 1,
+      category: null,
+      categoryId: null,
+    }));
+  }
+
   // --- vector index -----------------------------------------------------------
 
   const insertVec = db.prepare('INSERT OR REPLACE INTO page_vectors(page_id, embedding) VALUES (?, ?)');
@@ -405,7 +437,10 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
       .all(toBlob(vec)) as { pageId: number; distance: number }[];
   }
 
-  function keywordSearch(params: SearchParams): SearchHit[] {
+  // FTS leg shared by keyword mode and the hybrid merge: raw SQL filters only.
+  // No score/category post-processing here — the hybrid merge must rank the
+  // full leg before post-filters apply to the final set.
+  function ftsLeg(params: SearchParams, limit: number): Parameters<typeof annotate>[0] {
     const match = ftsQuery(params.q);
     if (!match) return [];
     const conds = ['pages_fts MATCH ?'];
@@ -422,9 +457,8 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
       conds.push('p.captured_at <= ?');
       args.push(params.until);
     }
-    const limit = Math.min(Math.max(params.limit ?? 20, 1), 100);
     args.push(limit);
-    const rows = db
+    return db
       .prepare(
         `SELECT p.id AS id, p.url AS url, p.domain AS domain, p.title AS title,
                 snippet(pages_fts, 1, '[', ']', '…', 16) AS snippet,
@@ -434,15 +468,39 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
          WHERE ${conds.join(' AND ')}
          LIMIT ?`
       )
-      .all(...args) as Omit<SearchHit, 'ageDays' | 'supersededBy' | 'stale'>[];
-    return annotate(rows);
+      .all(...args) as Parameters<typeof annotate>[0];
+  }
+
+  function searchLimit(params: SearchParams): number {
+    return Math.min(Math.max(params.limit ?? 20, 1), 100);
+  }
+
+  // Shared tail of both search paths: age/stale annotation, then confidence
+  // (normalized to the result set) and category (best matching focus rule),
+  // then the dashboard's post-scoring filters. minScore/categoryId cannot be
+  // SQL conds — score only exists once the result set is known, and category
+  // needs page vectors — so the SQL LIMIT overfetches 2x when either filter is
+  // active, keeping the filtered tail from shrinking below `limit`.
+  function postProcess(rows: Parameters<typeof annotate>[0], params: SearchParams, limit: number): ScoredHit[] {
+    const scored = withScores(annotate(rows));
+    categorize(scored);
+    let out = scored;
+    if (params.categoryId !== undefined) out = out.filter((h) => h.categoryId === params.categoryId);
+    if (params.minScore !== undefined) out = out.filter((h) => h.score >= params.minScore!);
+    return out.slice(0, limit);
+  }
+
+  function keywordSearch(params: SearchParams): ScoredHit[] {
+    const limit = searchLimit(params);
+    const fetch = params.minScore !== undefined || params.categoryId !== undefined ? Math.min(limit * 2, 200) : limit;
+    return postProcess(ftsLeg(params, fetch), params, limit);
   }
 
   // Hybrid: FTS bm25 + vector KNN merged with reciprocal rank fusion.
-  async function search(params: SearchParams): Promise<SearchHit[]> {
+  async function search(params: SearchParams): Promise<ScoredHit[]> {
     if (params.mode === 'keyword') return keywordSearch(params);
-    const limit = Math.min(Math.max(params.limit ?? 20, 1), 100);
-    const fts = keywordSearch({ ...params, limit: limit * 2 });
+    const limit = searchLimit(params);
+    const fts = ftsLeg(params, limit * 2);
     let vecRows: { pageId: number; distance: number }[] = [];
     try {
       const queryVec = await embedText(params.q);
@@ -488,7 +546,7 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
       const ftsHit = fts.find((hit) => hit.id === id);
       merged.push({ ...row, snippet: ftsHit?.snippet ?? row.snippet, rank: score });
     }
-    return annotate(merged).slice(0, limit);
+    return postProcess(merged, params, limit);
   }
 
   function stats(): Stats {
@@ -719,6 +777,47 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
     const keywords = r.keywords.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
     const topicVecs = blobToVecs(r.topic_vecs, r.n_topics);
     return { id: r.id, enabled: r.enabled === 1, domain: r.domain, threshold: r.threshold, topics, keywords, topicVecs };
+  }
+
+  // Query-time category: label each hit with the enabled focus rule whose
+  // topic vectors it matches best (cosine >= that rule's threshold, the same
+  // embeddings + verdict math the keep/prune gate uses). Pages without a
+  // stored vector (embed drain pending) stay uncategorized. Reuses the rules
+  // the user already curates — no new schema, no new tagging surface.
+  function categorize(hits: ScoredHit[]): void {
+    if (hits.length === 0) return;
+    const rules = (focusRuleStmt.all() as RuleRow[])
+      .map(parseRule)
+      .filter((r) => r.enabled && r.topicVecs.length > 0);
+    if (rules.length === 0) return;
+    const ids = hits.map((h) => h.id);
+    const vecRows = db
+      .prepare(`SELECT page_id, embedding FROM page_vectors WHERE page_id IN (${ids.map(() => '?').join(',')})`)
+      .all(...ids) as { page_id: number; embedding: Buffer }[];
+    const vecById = new Map(
+      vecRows.map((v) => [
+        v.page_id,
+        new Float32Array(v.embedding.buffer.slice(v.embedding.byteOffset, v.embedding.byteOffset + v.embedding.byteLength)),
+      ])
+    );
+    for (const h of hits) {
+      const pageVec = vecById.get(h.id);
+      if (!pageVec) continue;
+      let best = -1;
+      let bestRule: (typeof rules)[number] | null = null;
+      for (const r of rules) {
+        if (!domainInScope(h.domain, r.domain)) continue;
+        const s = maxSim(pageVec, r.topicVecs);
+        if (s >= r.threshold && s > best) {
+          best = s;
+          bestRule = r;
+        }
+      }
+      if (bestRule) {
+        h.category = bestRule.topics[0]!.slice(0, 30);
+        h.categoryId = bestRule.id;
+      }
+    }
   }
 
   function listFocusRules(): FocusRule[] {
