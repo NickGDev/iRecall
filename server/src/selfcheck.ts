@@ -43,6 +43,14 @@ assert(r2.inserted === 0 && r2.skipped === 1, 'identical re-ingest skipped');
 const r3 = store.ingest([{ url: 'javascript:void(0)', content: 'x' }, { url: 'https://ok.com/a', content: '' }, { url: 123, content: 'x' }]);
 assert(r3.inserted === 0 && r3.skipped === 3, 'invalid pages rejected');
 
+// content beyond MAX_CONTENT_BYTES (2MB) rejected before it ever hits the DB
+const rBig = store.ingest([{ url: 'https://big.example/x', content: 'x'.repeat(2_000_001) }]);
+assert(rBig.inserted === 0 && rBig.skipped === 1, 'oversized content rejected');
+
+// FTS operator characters in raw queries must not throw (ftsQuery quoting)
+const opHits = await store.search({ q: 'OR AND NOT (sqlite" NEAR' });
+assert(Array.isArray(opHits), 'operator-laden query does not throw');
+
 const hits = await store.search({ q: 'sqlite' });
 assert(hits.length === 1 && hits[0]!.url === pageA.url, 'hybrid finds right page');
 
@@ -92,14 +100,67 @@ assert(ops.matched === false, 'operator-literal query no match, no throw');
 const quoted = store.getPagePassages(longHits[0]!.id, '"', longFull);
 assert(quoted.matched === false, 'quote-only query head fallback, no throw');
 
+// review fixes: matched reflects the FTS gate (CJK falls back to head, still
+// honest); greedy windows don't overlap
+store.ingest([{ url: 'https://example.com/cjk', title: 'CJK Notes', content: '量子計算 research notes. '.repeat(12) }]);
+const cjkHits = await store.search({ q: '量子計算', mode: 'keyword' });
+assert(cjkHits.length === 1, 'cjk page searchable');
+const cjkFull = store.getPage(cjkHits[0]!.id)!;
+const cjkPass = store.getPagePassages(cjkHits[0]!.id, '量子計算', cjkFull);
+assert(cjkPass.matched === true && cjkPass.passages[0]!.includes('量子計算'), 'cjk match honest, head fallback');
+
+store.ingest([
+  {
+    url: 'https://example.com/spread',
+    title: 'Spread',
+    content:
+      'MARKX alpha. ' +
+      'filler text padding. '.repeat(150) +
+      'MARKY beta. ' +
+      'filler text padding. '.repeat(150) +
+      'MARKZ gamma. '.repeat(6),
+  },
+]);
+const spreadHits = await store.search({ q: 'MARKX MARKY MARKZ alpha beta gamma', mode: 'keyword' });
+assert(spreadHits.length === 1, 'spread page searchable');
+const spreadFull = store.getPage(spreadHits[0]!.id)!;
+const spreadPass = store.getPagePassages(spreadHits[0]!.id, 'MARKX MARKY MARKZ alpha beta gamma', spreadFull);
+assert(spreadPass.passages.length === 3, 'three separate windows');
+assert(spreadPass.passages[0]!.includes('MARKX') && !spreadPass.passages[0]!.includes('MARKY'), 'window 1 local');
+assert(spreadPass.passages[1]!.includes('MARKY') && !spreadPass.passages[1]!.includes('MARKX'), 'window 2 local, no overlap');
+
 await store.flushEmbeddings();
 const none = await store.search({ q: 'zzz-no-such-token', mode: 'keyword' });
 assert(none.length === 0, 'keyword no-match -> empty');
 
 const s = store.stats();
-assert(s.pages === 3 && s.embedded === 3, 'stats counts incl embeddings');
+assert(s.pages === 5 && s.embedded === 5, 'stats counts incl embeddings');
 
 // temporal: superseded + stale + decay
+
+// same-day content change: new row (not deduped) — url_day_hash only
+// backstops the same-url+same-content race, content change inserts
+const rSameDay = store.ingest([
+  { url: 'https://example.com/live-doc', title: 'live v1', content: 'live document state one. '.repeat(20), capturedAt: Date.now() - 60_000 },
+]);
+await store.flushEmbeddings();
+const rSameDay2 = store.ingest([
+  { url: 'https://example.com/live-doc', title: 'live v2', content: 'live document state two revised. '.repeat(20) },
+]);
+await store.flushEmbeddings();
+assert(rSameDay.inserted === 1 && rSameDay2.inserted === 1, 'same-day content change inserts both');
+const liveHits = await store.search({ q: 'state two revised', mode: 'keyword' });
+assert(liveHits.length === 1 && liveHits[0]!.supersededBy === null, 'same-day newer version current');
+const liveOld = await store.search({ q: 'state one', mode: 'keyword' });
+assert(liveOld.length === 1 && liveOld[0]!.supersededBy !== null, 'same-day older version superseded');
+
+// stale via age alone: >90d, no newer capture of the same url
+const aged = Date.now() - 95 * 86_400_000;
+store.ingest([{ url: 'https://example.com/aged', title: 'aged', content: 'aged unique parchment archive. '.repeat(20), capturedAt: aged }]);
+await store.flushEmbeddings();
+const agedHits = await store.search({ q: 'parchment archive', mode: 'keyword' });
+assert(agedHits.length === 1 && agedHits[0]!.stale === true && agedHits[0]!.supersededBy === null, 'stale via age alone, no superseder');
+
 const old = Date.now() - 120 * 86_400_000;
 store.ingest([
   { url: 'https://example.com/doc', title: 'V1', content: 'Alpha document about widgets. '.repeat(20), capturedAt: old },
@@ -119,7 +180,7 @@ const kw = await store.search({ q: 'pancakes', mode: 'keyword' });
 assert(kw.length === 0, 'deleted page gone from fts');
 const docId = v2hits[0]!.id;
 assert(store.deletePage(docId) === 1, 'id delete works');
-assert(store.stats().embedded === 3, 'vector rows cascade-deleted');
+assert(store.stats().embedded === 8, 'vector rows cascade-deleted');
 
 // purge-all path (dashboard 'all' sends olderThanDays=0): must delete everything
 store.ingest([{ url: 'https://left.io/x', title: 'leftover', content: 'leftover content page. '.repeat(20), capturedAt: Date.now() - 5000 }]);
@@ -143,6 +204,24 @@ assert(flakyStore.stats().embedded === 0, 'failed embeds not recorded');
 await flakyStore.flushEmbeddings(); // retry succeeds
 assert(flakyStore.stats().embedded === 1, 'requeued embed retried and succeeded');
 
+// permanent embed failure: 3 attempts then poisoned — skipped (not dropped,
+// not retried forever) until restart. Each flushEmbeddings = one drain slice
+// = one attempt for a single page.
+let failAlways = true;
+const poisonStore = createStore(':memory:', async (text: string) => {
+  if (failAlways) throw new Error('permanent model failure');
+  return fakeEmbed(text);
+});
+poisonStore.ingest([{ url: 'https://poison.io/a', title: 'poison', content: 'poison page content. '.repeat(20) }]);
+await poisonStore.flushEmbeddings();
+await poisonStore.flushEmbeddings();
+await poisonStore.flushEmbeddings(); // 3rd attempt marks the page poisoned
+assert(poisonStore.stats().embedded === 0, 'permanently failing embed never recorded');
+failAlways = false;
+await poisonStore.flushEmbeddings(); // embedder recovered — still skipped
+assert(poisonStore.stats().embedded === 0, 'poisoned page skipped until restart');
+poisonStore.close();
+
 // /recent since filter (phase-4 recent(hours))
 const store2 = createStore(':memory:', fakeEmbed);
 store2.ingest([
@@ -159,6 +238,7 @@ assert(
     'stale' in allRecent[0]!,
   'recent(returns annotated hits)'
 );
+assert(store2.recent(1).length === 1, 'recent honors limit');
 
 // focus rules: semantic keep/prune via topics + keyword boost + embed-drain gate
 const rid = await store2.setFocusRule({

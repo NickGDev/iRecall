@@ -617,20 +617,20 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
     }
     if (hits.length === 0) return [];
     hits.sort((a, b) => a - b);
-    // occurrences closer than 400 chars collapse into one window anchor
-    const anchors: number[] = [];
-    for (const h of hits) {
-      const last = anchors[anchors.length - 1]!;
-      if (last === undefined || h - last > 400) anchors.push(h);
-    }
+    // Greedy windows over sorted hits: hits inside the previous window are
+    // covered already; a hit past the window end opens the next one (review
+    // fix — anchor-distance clustering produced overlapping duplicates).
     const out: string[] = [];
     let used = 0;
-    for (const a of anchors) {
+    let lastEnd = -1;
+    for (const h of hits) {
       if (used >= maxTotal || out.length >= 3) break;
-      const start = Math.max(0, a - 150);
+      if (h < lastEnd) continue;
+      const start = Math.max(0, h - 150);
       const end = Math.min(content.length, start + 900);
       out.push((start > 0 ? '…' : '') + content.slice(start, end).trim() + (end < content.length ? '…' : ''));
       used += end - start;
+      lastEnd = end;
     }
     return out;
   }
@@ -663,11 +663,16 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
     const match = ftsQuery(q);
     const hit = match !== '' && ftsMatchRow.get(match, id);
     const tokens = [...new Set(q.toLowerCase().split(/\W+/).filter((t) => t.length > 1))];
+    // matched = the FTS gate's verdict (title+content, tokenizer-aware).
+    // Windows are cut from content tokens only, so CJK and title-only
+    // matches fall back to the page head with matched:true — honest label,
+    // degraded windows. (ponytail ceiling: per-script tokenizer or snippet()
+    // would window those too.)
     const found = hit ? extractPassages(row.content, tokens) : [];
     const passages = found.length > 0 ? found : [row.content.slice(0, 4000) + (row.content.length > 4000 ? '…' : '')];
     return {
       ...base,
-      matched: found.length > 0,
+      matched: !!hit,
       passages,
       totalChars: passages.reduce((n, p) => n + p.length, 0),
     };
