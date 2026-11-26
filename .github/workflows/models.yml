@@ -2,7 +2,7 @@
 # Heavy downloads (torch, safetensors, model files) inside the tag-triggered
 # release workflow were auto-cancelled by GitHub's abuse detection on this
 # new repo, so model builds are a deliberate, human-initiated job instead.
-# Produces recall-models.tar.gz: julia-1.5-fp16 (rebuilt from public
+# Produces irecall-models.tar.gz: julia-1.5-fp16 (rebuilt from public
 # SupersonicLabs sources, parity-gated) + granite q8 (public HF). Run when
 # the model version bumps, then upload to the current release.
 name: models
@@ -63,10 +63,10 @@ jobs:
           done
           curl -fsSL -o "$g/onnx/model_quantized.onnx" "$gb/onnx/model_quantized.onnx"
           curl -fsSL -o "$g/onnx/model_quantized.onnx_data" "$gb/onnx/model_quantized.onnx_data"
-          tar -czf recall-models.tar.gz -C server/models julia-1.5-fp16 onnx-community
+          tar -czf irecall-models.tar.gz -C server/models julia-1.5-fp16 onnx-community
       - uses: actions/upload-artifact@v4
         with:
-          name: recall-models
-          path: recall-models.tar.gz
+          name: irecall-models
+          path: irecall-models.tar.gz
           retention-days: 3
           compression-level: 0

@@ -143,7 +143,7 @@ async function renderPagePanel(token: string | undefined, enabled: boolean): Pro
     const list = await blockedList();
     blocked = host !== null && list.includes(host);
     if (st?.status === 'saved') {
-      status = 'Saved to Recall';
+      status = 'Saved to iRecall';
     } else if (st?.status === 'blocked') {
       status = 'Site blocked';
       blocked = true;

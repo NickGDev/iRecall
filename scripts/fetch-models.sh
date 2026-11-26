@@ -13,14 +13,14 @@ needs_julia()   { [ ! -f "$JULIA" ]; }
 needs_granite() { [ ! -f "$GRANITE_DIR/onnx/model_quantized.onnx" ]; }
 
 if needs_julia || needs_granite; then
-  REPO="${RECALL_REPO:-}"
+  REPO="${IRECALL_REPO:-}"
   if [ -z "$REPO" ] && command -v gh >/dev/null 2>&1; then
     REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)
   fi
   if [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
     echo "-- downloading models bundle ($REPO latest release)"
     tmp=$(mktemp -d)
-    if gh release download --repo "$REPO" -p 'recall-models.tar.gz' -O "$tmp/models.tar.gz" --clobber; then
+    if gh release download --repo "$REPO" -p 'irecall-models.tar.gz' -O "$tmp/models.tar.gz" --clobber; then
       tar -xzf "$tmp/models.tar.gz" -C server/models
     else
       echo "release download failed (no releases yet?) — falling back to HF for granite"

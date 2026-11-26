@@ -1,6 +1,6 @@
 # MCP server (phase 4 — implemented)
 
-Exposes the recall store to agents over **stdio** (`mcp/src/main.ts`). Pure HTTP
+Exposes the iRecall store to agents over **stdio** (`mcp/src/main.ts`). Pure HTTP
 client of the local server — never imports `store.ts`, opens SQLite, or loads
 the embedding model. Single DB writer and all validation stay server-side.
 
@@ -21,14 +21,14 @@ text stays in the DB).
 
 ```bash
 # Claude Code (from the repo root)
-claude mcp add recall -- node "$PWD/node_modules/tsx/dist/cli.mjs" "$PWD/mcp/src/main.ts"
+claude mcp add irecall -- node "$PWD/node_modules/tsx/dist/cli.mjs" "$PWD/mcp/src/main.ts"
 
 # Claude Desktop (claude_desktop_config.json)
-{ "mcpServers": { "recall": { "command": "node",
-  "args": ["/absolute/path/to/recall/node_modules/tsx/dist/cli.mjs", "/absolute/path/to/recall/mcp/src/main.ts"] } } }
+{ "mcpServers": { "irecall": { "command": "node",
+  "args": ["/absolute/path/to/irecall/node_modules/tsx/dist/cli.mjs", "/absolute/path/to/irecall/mcp/src/main.ts"] } } }
 ```
 
 Auth: reads the bearer token from `server/.token` on every call (survives token
 regeneration). Trust boundary: same-machine = trusted — the token keeps web
 pages out, not local processes. Server must be running:
-`launchctl kickstart -k gui/$(id -u)/dev.recall.server`.
+`launchctl kickstart -k gui/$(id -u)/dev.irecall.server`.

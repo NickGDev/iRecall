@@ -1,15 +1,15 @@
 <p align="center">
-  <img src="assets/banner.png" alt="Recall — a hippocampus for your browser history" width="720">
+  <img src="assets/banner.png" alt="iRecall — a hippocampus for your browser history" width="720">
 </p>
 
 <p align="center">
-  <a href="https://github.com/NickGDev/recall/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/NickGDev/recall?style=flat-square&label=latest%20release"></a>
+  <a href="https://github.com/NickGDev/iRecall/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/NickGDev/iRecall?style=flat-square&label=latest%20release"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square"></a>
   <img alt="macOS 14+ Apple silicon" src="https://img.shields.io/badge/macOS-14%2B%20Apple%20silicon-black?style=flat-square&logo=apple&logoColor=white">
   <img alt="100% local" src="https://img.shields.io/badge/cloud-none%2C%20100%25%20local-3ddc97?style=flat-square">
 </p>
 
-**Your browser remembers every tab you opened. Recall remembers what you
+**Your browser remembers every tab you opened. iRecall remembers what you
 actually *read* — privately, on your Mac, in clean full text your agents can
 search.**
 
@@ -40,28 +40,29 @@ Claude via MCP.
 
 | Search (hybrid, keyword + semantic) | Focus rules (plain language) |
 |---|---|
-| <img src="docs/screenshots/search.png" alt="Dashboard: hybrid search for &quot;sqlite fts5&quot; with dated results" width="480"> | <img src="docs/screenshots/focus-rules.png" alt="Focus rules page: teach recall what to remember" width="480"> |
+| <img src="docs/screenshots/search.png" alt="Dashboard: hybrid search for &quot;sqlite fts5&quot; with dated results" width="480"> | <img src="docs/screenshots/focus-rules.png" alt="Focus rules page: teach iRecall what to remember" width="480"> |
 
 ## 🚀 Try it
 
 **From a release** (macOS arm64/x64, Linux x64/arm64, Windows x64 — no
 toolchain needed):
 
-1. Grab your platform's bundle (`Recall-app-macos-arm64.zip`,
-   `Recall-app-macos-x64.zip`, `*.deb` / `*.AppImage`, or the Windows
+1. Grab your platform's bundle (`iRecall-app-macos-arm64.zip`,
+   `iRecall-app-macos-x64.zip`, `*.deb` / `*.AppImage`, or the Windows
    `*-setup.exe`) from the
-   [latest release](https://github.com/NickGDev/recall/releases), unzip, drag
-   `Recall.app` into Applications.
+   [latest release](https://github.com/NickGDev/iRecall/releases), unzip, drag
+   `iRecall.app` into Applications.
 2. Right-click → **Open** once (it's unsigned; Gatekeeper asks, you're the
    Gatekeeper). Everything is inside the bundle: node runtime, models,
    extension, menu-bar tray.
 3. Load the extension: `chrome://extensions` → Developer mode → **Load
-   unpacked** → `Recall.app/Contents/Resources/binaries/extension`.
+   unpacked** → `iRecall.app/Contents/Resources/binaries/extension`.
 
-That's it — an **R** appears in your menu bar (white = recording). Read stuff,
+That's it — an **iR** glyph appears in your menu bar; open it for live
+status. Read stuff,
 then open <http://127.0.0.1:8787> and search your brain. Data lives in
-`~/Library/Application Support/Recall/` and survives app replacement.
-Start-at-login: System Settings → General → Login Items → add Recall.
+`~/Library/Application Support/iRecall/` and survives app replacement.
+Start-at-login: System Settings → General → Login Items → add iRecall.
 
 **From source** (dev / CRX force-install flow):
 
@@ -77,7 +78,7 @@ crash) and caches models under `server/models` — fully offline after install.
 <details>
 <summary><strong>🛠️ What the source install sets up</strong></summary>
 
-- **Server** as LaunchAgent `dev.recall.server` — auto-start at login,
+- **Server** as LaunchAgent `dev.irecall.server` — auto-start at login,
   auto-restart on crash, logs to `server/server.log`
 - **Models** under `server/models`:
   - `granite-embedding-small-english-r2` (IBM, 47M params, 384-dim) — search
@@ -86,13 +87,13 @@ crash) and caches models under `server/models` — fully offline after install.
     ~10–75 ms per page on CPU. ONNX exported locally via
     `scripts/julia15-export/`. Tune with `JULIA_THRESHOLD` (default 0.5),
     disable with `JULIA_DISABLE=1` (fail-open)
-- **Extension** signed as CRX3 with a locally generated key (`keys/recall-key.pem`,
+- **Extension** signed as CRX3 with a locally generated key (`keys/irecall-key.pem`,
   stable ID `cafcekahohdjjdgongnpbbigkgccokec`), served from
   `http://127.0.0.1:8787/updates.xml`; it fetches its auth token from
   `/bootstrap` — no manual paste
-- **Recall.app** tray (Rust/Tauri, menu-bar accessory app): logo icon + `R`
-  title. Menu: status, Open Dashboard,
-  Pause/Resume, Quit. LaunchAgent `dev.recall.tray`. The recording flag lives
+- **iRecall.app** tray (Rust/Tauri, menu-bar accessory app): template `iR`
+  monogram icon. Menu: status, Open Dashboard,
+  Pause/Resume, Quit. LaunchAgent `dev.irecall.tray`. The recording flag lives
   on the server (`/config`) — tray, dashboard, and popup all write there; the
   extension mirrors it within ~60s
 
@@ -125,11 +126,11 @@ keep permanently protects that domain.
 
 ## 💬 Ask your agent
 
-Recall ships an MCP server (stdio) that wraps the local HTTP API:
+iRecall ships an MCP server (stdio) that wraps the local HTTP API:
 
 ```bash
 # Claude Code, from the repo root
-claude mcp add recall -- node "$PWD/node_modules/tsx/dist/cli.mjs" "$PWD/mcp/src/main.ts"
+claude mcp add irecall -- node "$PWD/node_modules/tsx/dist/cli.mjs" "$PWD/mcp/src/main.ts"
 ```
 
 | Tool | What your agent gets |
@@ -143,12 +144,12 @@ or *"summarize everything I've read about MCP servers, newest first"*.
 
 ## 🕶️ Privacy, honestly
 
-- **All local.** Server binds `127.0.0.1` only; DB at `server/data/recall.db`
+- **All local.** Server binds `127.0.0.1` only; DB at `server/data/irecall.db`
   (mode 600; FileVault protects at rest). A Host-allowlist middleware rejects
   non-loopback Host headers, closing DNS rebinding.
 - **Auth:** bearer token gates `/ingest`, `/search`, `/recent`, `/pages/:id`,
   `/stats`. Open routes: `/health`, `/bootstrap`, `/`, `/updates.xml`,
-  `/recall.crx` (Chrome's updater needs those). The token defends against
+  `/irecall.crx` (Chrome's updater needs those). The token defends against
   *web pages*, not local processes — same machine = trusted.
 - **Never captured:** pages with password fields, blocked domains, incognito,
   extracted text under 250 chars.
@@ -168,7 +169,7 @@ or *"summarize everything I've read about MCP servers, newest first"*.
 ```
 Chrome ext (MV3, force-installed)   Local server (127.0.0.1:8787, LaunchAgent)
 ├─ spy.js (MAIN world)              ├─ open: /health /bootstrap / (status page)
-│   └─ history API hook (SPA nav)   │        /updates.xml /recall.crx
+│   └─ history API hook (SPA nav)   │        /updates.xml /irecall.crx
 ├─ content.js (isolated)            ├─ auth: /ingest /search /recent /stats
 │   ├─ gates: paused / blocked      ├─ SQLite (WAL) + FTS5 + page_vectors
 │   │   domains, password fields    │   (brute-force cosine KNN over blobs —
@@ -204,7 +205,7 @@ Chrome ext (MV3, force-installed)   Local server (127.0.0.1:8787, LaunchAgent)
 
 Artifacts never live in git (`server/models/`, built CRX, compiled dist are
 ignored). Models are a manual job (Actions → **models** → Run workflow, then
-upload `recall-models.tar.gz` to the latest release) — tag-triggered model
+upload `irecall-models.tar.gz` to the latest release) — tag-triggered model
 downloads get auto-cancelled by GitHub's abuse detection on this repo.
 Pushing a `v*` tag runs the release workflow:
 
@@ -213,11 +214,11 @@ Pushing a `v*` tag runs the release workflow:
   tray (`src-tauri`) + server + extension, and assembles a self-contained
   bundle (bundled node runtime, tray, prod `node_modules`, models, unpacked
   extension). Unsigned — macOS users right-click-open once.
-- **release** — attaches the per-platform bundles + `recall-models.tar.gz`
+- **release** — attaches the per-platform bundles + `irecall-models.tar.gz`
   (re-attached each release so the chain propagates) + SHA256SUMS.
 
 No keys are stored in the repo or CI; the CRX key is generated on your machine
-(`npm run pack:ext` creates `keys/recall-key.pem` on first use) for the
+(`npm run pack:ext` creates `keys/irecall-key.pem` on first use) for the
 pinned-ID CRX.
 
 </details>

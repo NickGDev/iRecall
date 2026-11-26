@@ -1,15 +1,15 @@
 #!/bin/bash
-# Recall — one-shot mac installer: deps, model, extension CRX + update feed,
+# iRecall — one-shot mac installer: deps, model, extension CRX + update feed,
 # LaunchAgent auto-start, Chrome force-install policy.
 set -euo pipefail
 
 PROJECT="$(cd "$(dirname "$0")/.." && pwd)"
 NODE_BIN="$(command -v node)"
 UID_N="$(id -u)"
-LABEL="dev.recall.server"
-PLIST_DST="$HOME/Library/LaunchAgents/dev.recall.server.plist"
+LABEL="dev.irecall.server"
+PLIST_DST="$HOME/Library/LaunchAgents/dev.irecall.server.plist"
 
-echo "== Recall installer =="
+echo "== iRecall installer =="
 echo "project: $PROJECT"
 
 command -v node >/dev/null || { echo "node missing — install node first"; exit 1; }
@@ -31,25 +31,11 @@ echo "-- tray app (Tauri shell)"
 # Cross-platform Rust tray (src-tauri) built by scripts/build-app.sh; build
 # it on the spot when missing. Prefer an existing /Applications copy (survives
 # app cleaners better); fall back to a project-local bundle.
-APP_DST="$PROJECT/Recall.app"
-[ -d /Applications/Recall.app ] && APP_DST="/Applications/Recall.app"
+APP_DST="$PROJECT/iRecall.app"
+[ -d /Applications/iRecall.app ] && APP_DST="/Applications/iRecall.app"
 [ -d "$APP_DST" ] || bash "$PROJECT/scripts/build-app.sh"
 codesign --force --deep -s - "$APP_DST" 2>/dev/null || true
 echo "tray app ($APP_DST: menu bar: state, dashboard, pause, quit)"
-# Prefer an existing /Applications copy (survives app cleaners better); fall
-# back to a project-local bundle.
-APP_DST="$PROJECT/Recall.app"
-[ -d /Applications/Recall.app ] && APP_DST="/Applications/Recall.app"
-if command -v swiftc >/dev/null 2>&1; then
-  swiftc -O scripts/RecallTray.swift -o "$APP_DST/Contents/MacOS/Recall"
-  codesign --sign - --force "$APP_DST/Contents/MacOS/Recall" 2>/dev/null || true
-  echo "tray app compiled ($APP_DST: menu bar: state, dashboard, pause, quit)"
-else
-  mkdir -p "$APP_DST/Contents/MacOS"
-  cp scripts/recall-launcher.sh "$APP_DST/Contents/MacOS/Recall"
-  echo "swiftc missing — bash launcher fallback (no tray icon)"
-fi
-chmod +x "$APP_DST/Contents/MacOS/Recall"
 
 echo "-- LaunchAgent (auto-start + keepalive)"
 mkdir -p "$HOME/Library/LaunchAgents"
@@ -84,9 +70,12 @@ cat > "$PLIST_DST" <<EOF
 EOF
 
 # history DB + WAL are private: no other local account should read them
-chmod 600 "$PROJECT/server/data/"recall.db* 2>/dev/null || true
+chmod 600 "$PROJECT/server/data/"irecall.db* 2>/dev/null || true
 
 launchctl bootout "gui/$UID_N/$LABEL" 2>/dev/null || true
+# pre-rename agents (dev.recall.*) would fight the new ones for port 8787
+launchctl bootout "gui/$UID_N/dev.recall.server" 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/dev.recall.server.plist"
 lsof -ti tcp:8787 | xargs kill 2>/dev/null || true
 sleep 1
 launchctl bootstrap "gui/$UID_N" "$PLIST_DST" 2>/dev/null || true
@@ -99,13 +88,13 @@ done
 [ -n "$ok" ] && echo "server: running" || { echo "server failed to start — see server/server.log"; exit 1; }
 
 echo "-- tray app LaunchAgent (starts at login)"
-TRAY_PLIST="$HOME/Library/LaunchAgents/dev.recall.tray.plist"
+TRAY_PLIST="$HOME/Library/LaunchAgents/dev.irecall.tray.plist"
 cat > "$TRAY_PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>dev.recall.tray</string>
+  <key>Label</key><string>dev.irecall.tray</string>
   <key>ProgramArguments</key>
   <array>
     <string>open</string>
@@ -116,9 +105,11 @@ cat > "$TRAY_PLIST" <<EOF
 </dict>
 </plist>
 EOF
+launchctl bootout "gui/$UID_N/dev.irecall.tray" 2>/dev/null || true
 launchctl bootout "gui/$UID_N/dev.recall.tray" 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/dev.recall.tray.plist"
 launchctl bootstrap "gui/$UID_N" "$TRAY_PLIST" 2>/dev/null || true
-launchctl kickstart "gui/$UID_N/dev.recall.tray" 2>/dev/null || open -a Recall
+launchctl kickstart "gui/$UID_N/dev.irecall.tray" 2>/dev/null || open -a iRecall
 echo "tray: launched"
 
 echo "-- Chrome force-install policy (requires admin password)"

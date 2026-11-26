@@ -11,7 +11,7 @@ env.cacheDir = path.join(ROOT, 'server', 'models');
 env.allowLocalModels = true;
 const MODEL_ID = 'onnx-community/granite-embedding-small-english-r2-ONNX';
 
-const db = new Database(path.join(ROOT, 'server/data/recall.db'), { readonly: true });
+const db = new Database(path.join(ROOT, 'server/data/irecall.db'), { readonly: true });
 const rows = db
   .prepare('SELECT title, content, domain FROM pages ORDER BY id LIMIT 4')
   .all() as { title: string | null; content: string; domain: string }[];

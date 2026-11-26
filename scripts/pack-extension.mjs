@@ -11,7 +11,7 @@ const extDir = path.join(root, 'extension');
 // Key must live outside the extension dir (Chrome refuses otherwise). Stable
 // key -> stable extension ID; gitignored since whoever holds it can sign
 // updates the force-install policy auto-installs.
-const keyPath = path.join(root, 'keys', 'recall-key.pem');
+const keyPath = path.join(root, 'keys', 'irecall-key.pem');
 const publicDir = path.join(root, 'server', 'public');
 const chromeBin = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
@@ -46,18 +46,18 @@ if (!existsSync(crxOut)) {
 }
 
 mkdirSync(publicDir, { recursive: true });
-copyFileSync(crxOut, path.join(publicDir, 'recall.crx'));
+copyFileSync(crxOut, path.join(publicDir, 'irecall.crx'));
 unlinkSync(crxOut);
 
 const version = JSON.parse(readFileSync(path.join(extDir, 'manifest.json'), 'utf8')).version;
 const updates = `<?xml version="1.0" encoding="UTF-8"?>
 <gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">
   <app appid="${id}" status="ok">
-    <updatecheck codebase="http://127.0.0.1:8787/recall.crx" version="${version}" />
+    <updatecheck codebase="http://127.0.0.1:8787/irecall.crx" version="${version}" />
   </app>
 </gupdate>
 `;
 writeFileSync(path.join(publicDir, 'updates.xml'), updates);
 
 console.log('extension id:', id);
-console.log('wrote server/public/recall.crx + updates.xml (version ' + version + ')');
+console.log('wrote server/public/irecall.crx + updates.xml (version ' + version + ')');

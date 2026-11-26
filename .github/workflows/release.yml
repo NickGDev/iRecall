@@ -29,13 +29,13 @@ jobs:
           - os: macos-15
             triple: aarch64-apple-darwin
             bundles: app
-            appdir: macos/Recall.app
-            zip: Recall-app-macos-arm64.zip
+            appdir: macos/iRecall.app
+            zip: iRecall-app-macos-arm64.zip
           - os: macos-15-intel
             triple: x86_64-apple-darwin
             bundles: app
-            zip: Recall-app-macos-x64.zip
-            appdir: macos/Recall.app
+            zip: iRecall-app-macos-x64.zip
+            appdir: macos/iRecall.app
           - os: ubuntu-22.04
             triple: x86_64-unknown-linux-gnu
             bundles: deb,appimage
@@ -67,7 +67,7 @@ jobs:
       - run: npm ci
       - name: Fetch model bundle from previous latest release (or HF for granite)
         env:
-          RECALL_REPO: ${{ github.repository }}
+          IRECALL_REPO: ${{ github.repository }}
         run: bash scripts/fetch-models.sh
       - name: Stage runtime (node sidecar + server tree + extension)
         run: bash scripts/stage-runtime.sh "${{ matrix.triple }}"
@@ -84,9 +84,9 @@ jobs:
           ditto -c -k --keepParent "$APP" "${{ matrix.zip }}"
       - uses: actions/upload-artifact@v4
         with:
-          name: recall-${{ matrix.triple }}
+          name: irecall-${{ matrix.triple }}
           path: |
-            Recall-app-*.zip
+            iRecall-app-*.zip
             src-tauri/target/release/bundle/**/*.deb
             src-tauri/target/release/bundle/**/*.AppImage
             src-tauri/target/release/bundle/**/*.exe
@@ -99,14 +99,14 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: recall-*
+          pattern: irecall-*
           merge-multiple: true
           path: dist
       - name: Fetch model bundle for re-attachment
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release download -p 'recall-models.tar.gz' -O dist/recall-models.tar.gz --clobber
+        run: gh release download -p 'irecall-models.tar.gz' -O dist/irecall-models.tar.gz --clobber
       - name: Checksums
         run: |
           cd dist

@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Recall",
+  "name": "iRecall",
   "description": "Local, private record of pages you read — searchable by your agents.",
   "version": "0.1.9",
   "permissions": ["storage", "alarms", "activeTab"],
@@ -21,7 +21,7 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Recall",
+    "default_title": "iRecall",
     "default_icon": {
       "16": "dist/icons/icon16-base.png",
       "32": "dist/icons/icon32-base.png",

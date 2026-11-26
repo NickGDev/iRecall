@@ -126,7 +126,7 @@ async function applyTabIcon(tabId: number): Promise<void> {
   chrome.action.setIcon({ tabId, path: ICONS[kind] });
   chrome.action.setTitle({
     tabId,
-    title: entry?.title ?? (!ok ? 'Recall: server not reachable' : 'Recall'),
+    title: entry?.title ?? (!ok ? 'iRecall: server not reachable' : 'iRecall'),
   });
 }
 
@@ -134,7 +134,7 @@ async function refreshChrome(): Promise<void> {
   const [ok, cfg] = await Promise.all([serverOk(), getConfig()]);
   chrome.action.setIcon({ path: ICONS[ok ? 'base' : 'err'] });
   chrome.action.setTitle({
-    title: !ok ? 'Recall: server not reachable' : cfg.enabled ? 'Recall' : 'Recall: paused',
+    title: !ok ? 'iRecall: server not reachable' : cfg.enabled ? 'iRecall' : 'iRecall: paused',
   });
   for (const tabId of Object.keys(await tabStates())) await applyTabIcon(Number(tabId));
 }
@@ -312,7 +312,7 @@ async function doFlush(): Promise<void> {
       // "kept out by the focus filter" instead of a generic "not captured".
       const sent = buffer.find((b) => b.page.url === fp.url);
       if (sent?.tabId != null) {
-        void setTabEntry(sent.tabId, 'filtered', 'Recall: focus filter kept this out');
+        void setTabEntry(sent.tabId, 'filtered', 'iRecall: focus filter kept this out');
       }
     }
     const lastSeq = buffer[buffer.length - 1]!.seq;
@@ -390,7 +390,7 @@ chrome.runtime.onMessage.addListener((msg: CaptureMsg | StateMsg, sender) => {
     const tabId = sender.tab?.id;
     if (tabId != null) {
       const at = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      void setTabEntry(tabId, 'saved', `Recall: saved this page (${at})`);
+      void setTabEntry(tabId, 'saved', `iRecall: saved this page (${at})`);
       // Fade "saved" so it marks "this page was just captured", not a permanent
       // state. If the worker dies early the entry lasts until the next capture
       // message from that tab overwrites it anyway.
@@ -409,7 +409,7 @@ chrome.runtime.onMessage.addListener((msg: CaptureMsg | StateMsg, sender) => {
         : msg.reason === 'password'
           ? 'login page, skipped'
           : 'too little readable text';
-    void setTabEntry(tabId, msg.reason, `Recall: ${label}`);
+    void setTabEntry(tabId, msg.reason, `iRecall: ${label}`);
     void log('skip', `${label}: ${msg.host}`);
   }
 });

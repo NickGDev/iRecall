@@ -1,5 +1,5 @@
-// Recall MCP server (phase 4): exposes the local browsing history to agents
-// over stdio. Pure HTTP client of the recall server — never imports store.ts,
+// iRecall MCP server (phase 4): exposes the local browsing history to agents
+// over stdio. Pure HTTP client of the iRecall server — never imports store.ts,
 // opens SQLite, or loads the model. Single DB writer stays the server; one
 // validation path stays the process: the HTTP API.
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -57,13 +57,13 @@ async function api(pathAndQuery: string, opts?: { method?: string; body?: string
     });
   } catch {
     throw new Error(
-      `recall server unreachable at ${SERVER}. Start it: launchctl kickstart -k gui/$(id -u)/dev.recall.server`
+      `iRecall server unreachable at ${SERVER}. Start it: launchctl kickstart -k gui/$(id -u)/dev.irecall.server`
     );
   }
   if (res.status === 401) {
-    throw new Error('recall token rejected (server/.token stale?). Next call re-reads the file.');
+    throw new Error('iRecall token rejected (server/.token stale?). Next call re-reads the file.');
   }
-  if (!res.ok) throw new Error(`recall API ${pathAndQuery} failed: HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`iRecall API ${pathAndQuery} failed: HTTP ${res.status}`);
   return res.json();
 }
 
@@ -76,7 +76,7 @@ function hitLine(h: ApiHit): string {
     .join(' | ');
 }
 
-const server = new McpServer({ name: 'recall', version: '0.1.0' });
+const server = new McpServer({ name: 'irecall', version: '0.1.0' });
 
 server.registerTool(
   'search_history',

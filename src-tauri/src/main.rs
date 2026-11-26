@@ -1,12 +1,12 @@
-// Recall tray — menu-bar status + control, supervisor for the local server.
-// Tauri/Rust port of the former Swift tray (scripts/RecallTray.swift): same
+// iRecall tray — menu-bar status + control, supervisor for the local server.
+// Tauri/Rust port of the former Swift tray (scripts/iRecallTray.swift): same
 // menu, same 5s health poll, same supervision (fixed 3s respawn gap,
 // SIGTERM on quit so node exits cleanly and SQLite WAL checkpoints).
 //
 // The node runtime + server tree ship as Tauri resources under binaries/
 // (staged by scripts/stage-runtime.sh); data lives in the per-OS app-data
-// dir — macOS keeps the old ~/Library/Application Support/Recall path so
-// existing DBs + tokens survive the swap.
+// dir — macOS uses ~/Library/Application Support/iRecall (renamed from the
+// pre-rename .../Recall dir; old installs' data stays in the old path).
 use std::fs::OpenOptions;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -61,12 +61,11 @@ fn post_config(recording: bool, token: &str) -> bool {
 }
 
 fn data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
-    // macOS: old bundle used ~/Library/Application Support/Recall — keep it so
-    // an existing install's DB + token carry over. Elsewhere: Tauri default.
+    // macOS: ~/Library/Application Support/iRecall. Elsewhere: Tauri default.
     if cfg!(target_os = "macos") {
         app.path()
             .config_dir()
-            .map(|d| d.join("Recall"))
+            .map(|d| d.join("iRecall"))
             .map_err(|e| e.to_string())
     } else {
         app.path().app_data_dir().map_err(|e| e.to_string())
@@ -107,8 +106,8 @@ fn spawn_server(app: &AppHandle) -> Result<Child, String> {
     Command::new(node)
         .args(["--max-old-space-size=384", "dist/main.js"])
         .current_dir(&server_dir)
-        .env("RECALL_DB_PATH", data.join("recall.db"))
-        .env("RECALL_TOKEN_PATH", data.join(".token"))
+        .env("IRECALL_DB_PATH", data.join("irecall.db"))
+        .env("IRECALL_TOKEN_PATH", data.join(".token"))
         .stdout(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
         .stderr(Stdio::from(log))
         .spawn()
@@ -163,7 +162,7 @@ fn supervisor(app: AppHandle, quitting: Arc<AtomicBool>) {
                     }
                 }
             }
-            Err(e) => eprintln!("recall: server spawn failed: {e}"),
+            Err(e) => eprintln!("iRecall: server spawn failed: {e}"),
         }
         if quitting.load(Ordering::Relaxed) {
             break;
@@ -259,22 +258,25 @@ fn main() {
                 .build(app)?;
             let toggle = MenuItemBuilder::with_id("toggle", "Pause Recording").build(app)?;
             let dashboard = MenuItemBuilder::with_id("dashboard", "Open Dashboard").build(app)?;
-            let quit = MenuItemBuilder::with_id("quit", "Quit Recall").build(app)?;
+            let quit = MenuItemBuilder::with_id("quit", "Quit iRecall").build(app)?;
             let sep = PredefinedMenuItem::separator(app)?;
             let menu = MenuBuilder::new(app)
                 .items(&[&status, &toggle, &dashboard, &sep, &quit])
                 .build()?;
 
-            TrayIconBuilder::with_id("recall-tray")
-                .menu(&menu)
-                .icon(app.default_window_icon().expect("bundled icon").clone())
-                .build(app)?;
+            // "iR" monogram drawn as a transparent template PNG (icons/
+            // tray-ir.png) — the plain title API can't size or align text, and
+            // template tinting keeps it legible on light + dark menu bars.
+            // tray-icon renders every icon 18pt tall; the glyph fills ~16/18.
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!(
+                "../icons/tray-ir.png"
+            ))
+            .expect("valid tray-ir.png");
+            let builder =
+                TrayIconBuilder::with_id("irecall-tray").menu(&menu).icon(tray_icon);
             #[cfg(target_os = "macos")]
-            if let Some(tray) = app.tray_by_id("recall-tray") {
-                // Swift tray drew a colored text monogram; plain title + the
-                // bundled logo icon carry the same information.
-                let _ = tray.set_title(Some("R"));
-            }
+            let builder = builder.icon_as_template(true);
+            builder.build(app)?;
 
             let items = TrayItems { status, toggle };
             {

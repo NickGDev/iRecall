@@ -15,10 +15,10 @@ const PORT = 8787;
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(here, '..');
 // Data paths are overridable so the .app bundle can keep the DB + token in
-// ~/Library/Application Support/Recall (survives app replacement) while the
+// ~/Library/Application Support/iRecall (survives app replacement) while the
 // defaults preserve the repo layout for dev + install-mac.sh.
-const TOKEN_PATH = process.env.RECALL_TOKEN_PATH ?? path.join(root, '.token');
-const DB_PATH = process.env.RECALL_DB_PATH ?? path.join(root, 'data', 'recall.db');
+const TOKEN_PATH = process.env.IRECALL_TOKEN_PATH ?? path.join(root, '.token');
+const DB_PATH = process.env.IRECALL_DB_PATH ?? path.join(root, 'data', 'irecall.db');
 const PUBLIC_DIR = path.join(root, 'public');
 
 // History DB + token are private to the user account (the LaunchAgent set
@@ -120,7 +120,7 @@ const staticFiles: Record<string, { file: string; type: string }> = {
   '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/rules': { file: 'rules.html', type: 'text/html; charset=utf-8' },
   '/updates.xml': { file: 'updates.xml', type: 'application/xml' },
-  '/recall.crx': { file: 'recall.crx', type: 'application/x-chrome-extension' },
+  '/irecall.crx': { file: 'irecall.crx', type: 'application/x-chrome-extension' },
 };
 
 for (const [route, spec] of Object.entries(staticFiles)) {
@@ -542,7 +542,7 @@ function extStatus() {
   const id = extId();
   return {
     extId: id,
-    crx: existsSync(path.join(PUBLIC_DIR, 'recall.crx')),
+    crx: existsSync(path.join(PUBLIC_DIR, 'irecall.crx')),
     policyInstalled: id !== null && policyEntries().includes(`${id};${UPDATE_URL}`),
     extPath: path.join(PROJECT_ROOT, 'extension'),
   };
@@ -631,7 +631,7 @@ setInterval(() => {
       // boot never pays a model load inside /ingest.
       warmed = true;
       try {
-        await Promise.all([juliaWarmup(), embedOne('recall warm-up')]);
+        await Promise.all([juliaWarmup(), embedOne('irecall warm-up')]);
         console.log('models warmed');
       } catch (err) {
         console.error('model warm-up failed (stays lazy):', err instanceof Error ? err.message : err);
@@ -683,7 +683,7 @@ setInterval(() => {
 mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
 const server = serve({ fetch: app.fetch, port: PORT, hostname: '127.0.0.1' }, (info) => {
-  console.log(`recall server on http://127.0.0.1:${info.port} (db: ${DB_PATH})`);
+  console.log(`iRecall server on http://127.0.0.1:${info.port} (db: ${DB_PATH})`);
   console.log('status page: http://127.0.0.1:8787/');
   const ext = extStatus();
   if (!ext.crx || !ext.policyInstalled) {

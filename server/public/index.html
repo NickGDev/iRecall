@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Recall dashboard</title>
-    <meta name="description" content="Search, manage and tune your local Recall page record." />
+    <title>iRecall dashboard</title>
+    <meta name="description" content="Search, manage and tune your local iRecall page record." />
     <link rel="icon" href="data:," />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -15,7 +15,7 @@
     <style>
       /* Hallmark · v2.0.0
        * theme: Console (dealt 3/3) · console: graphite · genre: modern-minimal · shape: app screen
-       * screen: recall dashboard, five hash tabs (search, pages, focus, blocked, settings) · states: loading, empty, error, full
+       * screen: iRecall dashboard, five hash tabs (search, pages, focus, blocked, settings) · states: loading, empty, error, full
        * redesign: full · keeps: every endpoint, handler and id on record (.hallmark/before.json)
        * pre-emit critique: P5 H4 E4 S4 R4 V4 · weakest: V, first Console build in the log
        * finish-review: subagent · round 1 recapture (3 shots caught a server hiccup; failure states fixed) · round 2: 5 findings, 5 resolved
@@ -343,7 +343,7 @@
   <body>
     <header class="container">
       <div class="topbar">
-        <span class="wordmark">Recall</span>
+        <span class="wordmark">iRecall</span>
         <nav class="tabs" aria-label="Dashboard sections">
           <a href="#search">Search</a>
           <a href="#pages">Pages</a>
@@ -771,7 +771,7 @@
         try {
           stats = await api('/stats');
         } catch {
-          failInto($('cards'), 'could not load stats. check that recall is running.');
+          failInto($('cards'), 'could not load stats. check that iRecall is running.');
           return;
         }
         const cards = $('cards');
@@ -794,7 +794,7 @@
           rows = await api('/recent?limit=15');
         } catch {
           const target = intoResults ? $('results') : box;
-          failInto(target, 'could not load recent pages. check that recall is running.');
+          failInto(target, 'could not load recent pages. check that iRecall is running.');
           return;
         }
         box.textContent = '';
@@ -995,7 +995,7 @@
         try {
           data = await api('/api/rules');
         } catch {
-          failInto($('rule-list'), 'could not load focus rules. check that recall is running.');
+          failInto($('rule-list'), 'could not load focus rules. check that iRecall is running.');
           return;
         }
         const box = $('rule-list');
@@ -1015,7 +1015,7 @@
         try {
           data = await api('/api/exemplars');
         } catch {
-          failInto($('exemplar-list'), 'could not load taught pages. check that recall is running.');
+          failInto($('exemplar-list'), 'could not load taught pages. check that iRecall is running.');
           return;
         }
         const box = $('exemplar-list');
@@ -1081,7 +1081,7 @@
         try {
           data = await api('/api/blocked');
         } catch {
-          failInto(box, 'could not load blocked sites. check that recall is running.');
+          failInto(box, 'could not load blocked sites. check that iRecall is running.');
           return;
         }
         box.textContent = '';
@@ -1228,7 +1228,7 @@
         return 'Chrome force-install policy missing — reinstall re-adds it';
       }
       function extHintText(s) {
-        return 'Chrome ≥137 only honors force-install on MDM-managed browsers. If the extension is missing: chrome://extensions → Developer mode → Load unpacked → ' + (s.extPath || 'the extension/ folder of your recall checkout');
+        return 'Chrome ≥137 only honors force-install on MDM-managed browsers. If the extension is missing: chrome://extensions → Developer mode → Load unpacked → ' + (s.extPath || 'the extension/ folder of your iRecall checkout');
       }
       async function loadExtension() {
         const s = await api('/api/extension');
@@ -1286,7 +1286,7 @@
             await loadExtension();
           }
         } catch {
-          showStatus('could not load this section. check that recall is running.', 'bad');
+          showStatus('could not load this section. check that iRecall is running.', 'bad');
         }
       }
       function showTab(name) {
@@ -1307,7 +1307,7 @@
         await renderState();
         showTab(location.hash.slice(1) || 'search');
       })().catch((e) => {
-        showStatus('could not load data from the server. check that recall is running (npm run dev).', 'bad');
+        showStatus('could not load data from the server. check that iRecall is running (npm run dev).', 'bad');
       });
     </script>
   </body>

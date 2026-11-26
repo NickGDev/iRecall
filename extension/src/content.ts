@@ -103,7 +103,7 @@ function scheduleNavCapture(): void {
   }, NAV_DEBOUNCE_MS);
 }
 
-document.addEventListener('recall:nav', scheduleNavCapture);
+document.addEventListener('irecall:nav', scheduleNavCapture);
 window.addEventListener('pageshow', (e) => {
   if ((e as PageTransitionEvent).persisted) capture('bfcache');
 });

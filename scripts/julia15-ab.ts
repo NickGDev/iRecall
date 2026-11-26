@@ -80,7 +80,7 @@ async function pKeep(
 }
 
 // Same option phrasing as store/main setFocusCriteria: live rule keywords.
-const db = new Database(path.join(ROOT, 'server/data/recall.db'), { readonly: true });
+const db = new Database(path.join(ROOT, 'server/data/irecall.db'), { readonly: true });
 const rules = db.prepare('SELECT keywords, topics FROM focus_rules WHERE enabled = 1').all() as {
   keywords: string;
   topics: string;

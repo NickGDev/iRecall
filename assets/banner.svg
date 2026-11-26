@@ -14,16 +14,16 @@
 
   <g transform="translate(560,60) scale(0.203)">
     <rect width="512" height="512" rx="112" fill="#141728" stroke="#ffffff" stroke-opacity="0.08" stroke-width="6"/>
-    <text x="244" y="270" text-anchor="middle" dominant-baseline="central"
+    <text x="232" y="270" text-anchor="middle" dominant-baseline="central"
           font-family="-apple-system, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif"
-          font-size="290" font-weight="800" fill="#ffffff">R</text>
+          font-size="250" font-weight="800" fill="#ffffff">iR</text>
     <circle cx="381" cy="136" r="34" fill="none" stroke="#3ddc97" stroke-opacity="0.35" stroke-width="6"/>
     <circle cx="381" cy="136" r="20" fill="#3ddc97"/>
   </g>
 
   <text x="640" y="330" text-anchor="middle"
         font-family="-apple-system, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif"
-        font-size="120" font-weight="800" fill="#ffffff">Recall</text>
+        font-size="120" font-weight="800" fill="#ffffff">iRecall</text>
 
   <text x="640" y="392" text-anchor="middle"
         font-family="-apple-system, 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif"

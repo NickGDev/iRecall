@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Recall",
+  "productName": "iRecall",
   "version": "0.1.0",
-  "identifier": "dev.recall.app",
+  "identifier": "dev.irecall.app",
   "build": {
     "frontendDist": "static"
   },

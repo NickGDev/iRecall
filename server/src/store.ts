@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS exemplar_vectors (
 );
 `;
 
-// A focus rule tells recall what to remember: pages in scope (domain, or
+// A focus rule tells iRecall what to remember: pages in scope (domain, or
 // everywhere when null) are kept if their content is semantically close to any
 // topic description (cosine >= threshold, via the same MiniLM embeddings used
 // for search) OR mentions any keyword verbatim. Everything else in scope is
