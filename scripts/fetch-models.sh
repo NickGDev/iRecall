@@ -20,7 +20,9 @@ if needs_julia || needs_granite; then
   if [ -n "$REPO" ] && command -v gh >/dev/null 2>&1; then
     echo "-- downloading models bundle ($REPO latest release)"
     tmp=$(mktemp -d)
-    if gh release download --repo "$REPO" -p 'irecall-models.tar.gz' -O "$tmp/models.tar.gz" --clobber; then
+    # New bundle name first; releases predating the rename shipped recall-models.tar.gz.
+    if gh release download --repo "$REPO" -p 'irecall-models.tar.gz' -O "$tmp/models.tar.gz" --clobber \
+       || gh release download --repo "$REPO" -p 'recall-models.tar.gz' -O "$tmp/models.tar.gz" --clobber; then
       tar -xzf "$tmp/models.tar.gz" -C server/models
     else
       echo "release download failed (no releases yet?) — falling back to HF for granite"

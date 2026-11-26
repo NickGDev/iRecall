@@ -106,7 +106,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release download -p 'irecall-models.tar.gz' -O dist/irecall-models.tar.gz --clobber
+        run: |
+          gh release download -p 'irecall-models.tar.gz' -O dist/irecall-models.tar.gz --clobber || \
+            gh release download -p 'recall-models.tar.gz' -O dist/irecall-models.tar.gz --clobber
       - name: Checksums
         run: |
           cd dist
