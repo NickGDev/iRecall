@@ -8,6 +8,7 @@
 // dir — macOS uses ~/Library/Application Support/iRecall (renamed from the
 // pre-rename .../Recall dir; old installs' data stays in the old path).
 use std::fs::OpenOptions;
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -16,23 +17,56 @@ use std::time::Duration;
 
 use serde_json::json;
 use tauri::menu::{MenuBuilder, MenuItem, MenuItemBuilder, PredefinedMenuItem};
-use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Manager, RunEvent, Wry};
+use tauri::tray::{TrayIcon, TrayIconBuilder};
+use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, Wry};
 
 const BASE: &str = "http://127.0.0.1:8787";
 const RESPAWN_DELAY: Duration = Duration::from_secs(3);
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 
+// Extension presence, straight from the server's /config response. warn =
+// not connected && not dismissed — drives the tray badge, menu item and the
+// floating setup window.
+#[derive(Clone, Copy, PartialEq)]
+struct ExtState {
+    connected: bool,
+    never: bool,
+    dismissed: bool,
+}
+
+fn ext_of(config: &serde_json::Value) -> Option<ExtState> {
+    let e = config.get("extension")?;
+    Some(ExtState {
+        connected: e.get("connected")?.as_bool()?,
+        never: e.get("never")?.as_bool()?,
+        dismissed: e.get("dismissed")?.as_bool()?,
+    })
+}
+
+fn is_warn(ext: Option<ExtState>) -> bool {
+    ext.is_some_and(|e| !e.connected && !e.dismissed)
+}
+
 struct UiState {
     healthy: bool,
     recording: bool,
     token: Option<String>,
+    ext: Option<ExtState>,
+    setup_prompted: bool,
+}
+
+struct Icons {
+    base: tauri::image::Image<'static>,
+    warn: tauri::image::Image<'static>,
 }
 
 #[derive(Clone)]
 struct TrayItems {
     status: MenuItem<Wry>,
     toggle: MenuItem<Wry>,
+    setup: MenuItem<Wry>,
+    tray: TrayIcon<Wry>,
+    icons: Arc<Icons>,
 }
 
 struct SupervisorPid(Mutex<Option<u32>>);
@@ -69,6 +103,72 @@ fn data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
             .map_err(|e| e.to_string())
     } else {
         app.path().app_data_dir().map_err(|e| e.to_string())
+    }
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let to = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&entry.path(), &to)?;
+        } else {
+            std::fs::copy(entry.path(), to)?;
+        }
+    }
+    Ok(())
+}
+
+// "The app auto prepares a dir with the extension": copy the bundled unpacked
+// extension to a stable path under the data dir so Load-unpacked keeps working
+// across app updates and never points Chrome into the .app bundle. Re-copied
+// every launch (cheap, keeps the dir in sync with the shipped version).
+fn prepare_extension_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
+    let dest = data_dir(app).ok()?.join("extension");
+    let src = app
+        .path()
+        .resource_dir()
+        .ok()?
+        .join("binaries")
+        .join("extension");
+    if src.join("manifest.json").exists() {
+        let _ = std::fs::remove_dir_all(&dest);
+        copy_dir_all(&src, &dest).ok()?;
+    }
+    dest.exists().then_some(dest)
+}
+
+// Floating setup panel, always-on-top so it overlays Chrome while the user
+// follows the steps in it.
+fn open_setup_window(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("setup") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return;
+    }
+    let width = 460.0f64;
+    let height = 560.0f64;
+    let mut pos = (24.0f64, 40.0f64); // fallback: top-left
+    if let Ok(Some(monitor)) = app.primary_monitor() {
+        let scale = monitor.scale_factor();
+        let mx = monitor.position().x as f64 / scale;
+        let my = monitor.position().y as f64 / scale;
+        let mw = monitor.size().width as f64 / scale;
+        pos = (mx + mw - width - 40.0, my + 48.0);
+    }
+    let _ = WebviewWindowBuilder::new(app, "setup", WebviewUrl::App("setup.html".into()))
+        .title("Set up iRecall for Chrome")
+        .inner_size(width, height)
+        .resizable(false)
+        .always_on_top(true)
+        .position(pos.0, pos.1)
+        .build();
+}
+
+fn close_setup_window(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("setup") {
+        let _ = win.close();
     }
 }
 
@@ -172,10 +272,14 @@ fn supervisor(app: AppHandle, quitting: Arc<AtomicBool>) {
 }
 
 fn poller(app: AppHandle, quitting: Arc<AtomicBool>, ui: Arc<Mutex<UiState>>, items: TrayItems) {
+    let mut was_warn = false;
     while !quitting.load(Ordering::Relaxed) {
         let healthy = health_ok();
         let status_text;
         let toggle_text;
+        // warn/closing/auto_open are read after the lock block.
+        let warn;
+        let mut auto_open = false;
         {
             let mut st = ui.lock().unwrap();
             if healthy && st.token.is_none() {
@@ -189,10 +293,19 @@ fn poller(app: AppHandle, quitting: Arc<AtomicBool>, ui: Arc<Mutex<UiState>>, it
                         if let Some(r) = v.get("recording").and_then(|r| r.as_bool()) {
                             st.recording = r;
                         }
+                        st.ext = ext_of(&v);
                     }
                 }
             }
             st.healthy = healthy;
+            warn = healthy && is_warn(st.ext);
+            // First install (extension never seen, user never dismissed):
+            // surface the setup window once per launch instead of waiting for
+            // the user to notice the badge.
+            if healthy && st.ext.is_some_and(|e| e.never && !e.dismissed) && !st.setup_prompted {
+                st.setup_prompted = true;
+                auto_open = true;
+            }
             status_text = if !healthy {
                 "Server down".to_string()
             } else if st.recording {
@@ -206,12 +319,37 @@ fn poller(app: AppHandle, quitting: Arc<AtomicBool>, ui: Arc<Mutex<UiState>>, it
                 "Resume Recording".to_string()
             };
         }
+        let closing = was_warn && !warn;
+        was_warn = warn;
 
-        // Menu item APIs are main-thread on macOS.
+        // Menu/tray/window APIs are main-thread on macOS.
         let it = items.clone();
+        let app_for_ui = app.clone();
         let _ = app.run_on_main_thread(move || {
             let _ = it.status.set_text(status_text);
             let _ = it.toggle.set_text(toggle_text);
+            let _ = it.setup.set_enabled(warn);
+            // Warning icon ships in full color (non-template) so the yellow
+            // badge survives tinting on light + dark menu bars.
+            let icon = if warn {
+                it.icons.warn.clone()
+            } else {
+                it.icons.base.clone()
+            };
+            let _ = it.tray.set_icon(Some(icon));
+            #[cfg(target_os = "macos")]
+            let _ = it.tray.set_icon_as_template(!warn);
+            let _ = it.tray.set_tooltip(if warn {
+                Some("iRecall — set up the Chrome extension")
+            } else {
+                None
+            });
+            if auto_open {
+                open_setup_window(&app_for_ui);
+            }
+            if closing {
+                close_setup_window(&app_for_ui); // extension checked in — done
+            }
         });
         thread::sleep(POLL_INTERVAL);
     }
@@ -225,8 +363,91 @@ fn request_quit(app: &AppHandle, quitting: &Arc<AtomicBool>) {
     app.exit(0);
 }
 
+// --- setup-window commands (called from static/setup.html) ------------------------
+
+#[tauri::command]
+fn extension_info(app: AppHandle) -> serde_json::Value {
+    let ext = {
+        let st = app.state::<Arc<Mutex<UiState>>>();
+        let guard = st.lock().unwrap();
+        guard.ext
+    };
+    let dir = prepare_extension_dir(&app);
+    json!({
+        "connected": ext.is_some_and(|e| e.connected),
+        "dir": dir.map(|d| d.display().to_string()),
+    })
+}
+
+#[tauri::command]
+fn open_chrome_extensions() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let res = Command::new("open")
+        .args(["-a", "Google Chrome", "chrome://extensions"])
+        .spawn();
+    #[cfg(target_os = "windows")]
+    let res = Command::new("cmd")
+        .args(["/C", "start", "", "chrome://extensions"])
+        .spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let res: std::io::Result<()> = Err(std::io::Error::other("unsupported platform"));
+    res.map(|_| ()).map_err(|e| format!("could not open Chrome: {e}"))
+}
+
+#[tauri::command]
+fn reveal_extension_dir(app: AppHandle) -> Result<(), String> {
+    let Some(dir) = prepare_extension_dir(&app) else {
+        return Err("extension folder not found (dev build? load the repo's extension/ folder instead)".into());
+    };
+    #[cfg(target_os = "macos")]
+    let res = Command::new("open").arg("-R").arg(&dir).spawn();
+    #[cfg(target_os = "windows")]
+    let res = Command::new("explorer").arg(format!("/select,{}", dir.display())).spawn();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let res = Command::new("xdg-open").arg(&dir).spawn();
+    res.map(|_| ()).map_err(|e| format!("could not reveal folder: {e}"))
+}
+
+#[tauri::command]
+fn dismiss_extension_setup(app: AppHandle) -> Result<(), String> {
+    let token = {
+        let st = app.state::<Arc<Mutex<UiState>>>();
+        let mut st = st.lock().unwrap();
+        if let Some(ext) = st.ext.as_mut() {
+            ext.dismissed = true; // clear the badge without waiting a poll tick
+        }
+        st.token.clone()
+    };
+    let Some(token) = token else {
+        return Err("server not connected yet".into());
+    };
+    let ok = ureq::post(&format!("{BASE}/api/extension/dismiss"))
+        .timeout(Duration::from_secs(2))
+        .set("authorization", &format!("Bearer {token}"))
+        .set("content-type", "application/json")
+        .send_json(json!({ "dismissed": true }))
+        .is_ok();
+    if ok {
+        Ok(())
+    } else {
+        Err("could not save the dismissal".into())
+    }
+}
+
+#[tauri::command]
+fn close_setup_window_cmd(app: AppHandle) {
+    close_setup_window(&app);
+}
+
 fn main() {
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![
+            extension_info,
+            open_chrome_extensions,
+            reveal_extension_dir,
+            dismiss_extension_setup,
+            close_setup_window_cmd
+        ])
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -247,38 +468,61 @@ fn main() {
                 healthy: false,
                 recording: true,
                 token: None,
+                ext: None,
+                setup_prompted: false,
             }));
             app.manage(ui.clone());
             app.manage(SupervisorPid(Mutex::new(None)));
             let quitting = Arc::new(AtomicBool::new(false));
             app.manage(QuitFlag(quitting.clone()));
 
+            // Bundle the unpacked extension to a stable data-dir path so the
+            // setup window + instructions can point at one fixed location.
+            prepare_extension_dir(app.handle());
+
             let status = MenuItemBuilder::with_id("status", "connecting…")
                 .enabled(false)
                 .build(app)?;
             let toggle = MenuItemBuilder::with_id("toggle", "Pause Recording").build(app)?;
+            let setup = MenuItemBuilder::with_id("setup", "Set Up Chrome Extension…").build(app)?;
             let dashboard = MenuItemBuilder::with_id("dashboard", "Open Dashboard").build(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Quit iRecall").build(app)?;
             let sep = PredefinedMenuItem::separator(app)?;
             let menu = MenuBuilder::new(app)
-                .items(&[&status, &toggle, &dashboard, &sep, &quit])
+                .items(&[&status, &toggle, &setup, &dashboard, &sep, &quit])
                 .build()?;
 
             // "iR" monogram drawn as a transparent template PNG (icons/
             // tray-ir.png) — the plain title API can't size or align text, and
             // template tinting keeps it legible on light + dark menu bars.
             // tray-icon renders every icon 18pt tall; the glyph fills ~16/18.
-            let tray_icon = tauri::image::Image::from_bytes(include_bytes!(
-                "../icons/tray-ir.png"
-            ))
-            .expect("valid tray-ir.png");
+            // tray-ir-warn.png is the same glyph on a color chip with a yellow
+            // badge; it renders non-template (set in the poller) so the yellow
+            // survives menu-bar tinting.
+            let icons = Arc::new(Icons {
+                base: tauri::image::Image::from_bytes(include_bytes!(
+                    "../icons/tray-ir.png"
+                ))
+                .expect("valid tray-ir.png"),
+                warn: tauri::image::Image::from_bytes(include_bytes!(
+                    "../icons/tray-ir-warn.png"
+                ))
+                .expect("valid tray-ir-warn.png"),
+            });
+            let tray_icon = icons.base.clone();
             let builder =
                 TrayIconBuilder::with_id("irecall-tray").menu(&menu).icon(tray_icon);
             #[cfg(target_os = "macos")]
             let builder = builder.icon_as_template(true);
-            builder.build(app)?;
+            let tray = builder.build(app)?;
 
-            let items = TrayItems { status, toggle };
+            let items = TrayItems {
+                status,
+                toggle,
+                setup,
+                tray,
+                icons,
+            };
             {
                 let app = app.handle().clone();
                 let quitting = quitting.clone();
@@ -306,6 +550,7 @@ fn main() {
                         }
                     }
                 }
+                "setup" => open_setup_window(app),
                 "dashboard" => {
                     use tauri_plugin_opener::OpenerExt;
                     let _ = app.opener().open_url(BASE.to_string(), None::<&str>);

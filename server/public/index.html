@@ -617,7 +617,10 @@
               <p class="muted measured" style="margin: 2px 0 0" id="ext-line">checking…</p>
               <p class="muted measured" style="margin: 2px 0 0" id="ext-hint" hidden></p>
             </div>
-            <button id="ext-reinstall" class="btn" type="button">Reinstall</button>
+            <div style="display: flex; gap: 8px">
+              <a id="ext-download" class="btn" style="display: inline-flex; align-items: center; text-decoration: none" href="/extension.zip" download="irecall-extension.zip">Download .zip</a>
+              <button id="ext-dismiss" class="btn" type="button">Hide reminder</button>
+            </div>
           </div>
         </div>
         <div class="section">
@@ -1638,33 +1641,29 @@
         }
       }
       function extLineText(s) {
-        if (!s.crx || !s.extId) return 'CRX not packed — reinstall builds it';
-        if (s.policyInstalled) return 'force-install policy present (id ' + s.extId.slice(0, 8) + '…)';
-        return 'Chrome force-install policy missing — reinstall re-adds it';
+        if (s.connected) return 'Connected — capturing from Chrome';
+        if (s.never) return 'Not installed';
+        return 'Disconnected — no check-in from the extension recently';
       }
       function extHintText(s) {
-        return 'Chrome ≥137 only honors force-install on MDM-managed browsers. If the extension is missing: chrome://extensions → Developer mode → Load unpacked → ' + (s.extPath || 'the extension/ folder of your iRecall checkout');
+        return 'Setup: chrome://extensions → Developer mode → Load unpacked → ' + (s.extPath || 'the extension folder iRecall prepared') + '. The tray shows a warning until the extension first checks in.';
       }
       async function loadExtension() {
         const s = await api('/api/extension');
         $('ext-line').textContent = extLineText(s);
         $('ext-hint').textContent = extHintText(s);
         $('ext-hint').hidden = false;
+        $('ext-dismiss').textContent = s.dismissed ? 'Show reminder' : 'Hide reminder';
       }
-      $('ext-reinstall').onclick = async function () {
-        this.disabled = true;
-        this.textContent = 'Reinstalling…';
+      $('ext-dismiss').onclick = async function () {
+        const hide = this.textContent === 'Hide reminder';
         try {
-          const res = await api('/api/extension/reinstall', { method: 'POST' });
-          $('ext-line').textContent = res.sudoCommand ? 'needs admin — run in a terminal: ' + res.sudoCommand : extLineText(res);
-          $('ext-hint').textContent = res.message || extHintText(res);
-          $('ext-hint').hidden = false;
-          showStatus(res.sudoCommand ? 'policy write declined — command shown above' : 'rebuilt', res.sudoCommand ? 'bad' : 'ok');
+          const s = await api('/api/extension/dismiss', { method: 'POST', body: JSON.stringify({ dismissed: hide }) });
+          this.textContent = s.dismissed ? 'Show reminder' : 'Hide reminder';
+          showStatus(hide ? 'setup reminder hidden' : 'setup reminder shown', 'ok');
         } catch (e) {
           showStatus(e.message, 'bad');
         }
-        this.disabled = false;
-        this.textContent = 'Reinstall';
       };
 
       // --- tab router: state in the URL, sections load lazily -------------------

@@ -2,8 +2,8 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { spawnSync } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import os from 'node:os';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import os, { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Context, Next } from 'hono';
@@ -113,21 +113,22 @@ app.get('/health', (c) => c.json({ ok: true, version: '0.3.0' }));
 // Pre-wiring for the extension: hands out the local token without manual paste.
 // No CORS headers + the Host allowlist above mean web pages cannot read
 // responses; only the extension (host_permissions) and same-machine processes
-// can reach it.
-app.get('/bootstrap', (c) => c.json({ token }));
+// can reach it. The extension marks its pings with x-irecall-client so the
+// server can tell them apart from the tray's own /bootstrap polling.
+app.get('/bootstrap', (c) => {
+  if (c.req.header('x-irecall-client') === 'extension') markExtensionSeen();
+  return c.json({ token });
+});
 
 const staticFiles: Record<string, { file: string; type: string }> = {
   '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/rules': { file: 'rules.html', type: 'text/html; charset=utf-8' },
-  '/updates.xml': { file: 'updates.xml', type: 'application/xml' },
-  '/irecall.crx': { file: 'irecall.crx', type: 'application/x-chrome-extension' },
 };
 
 for (const [route, spec] of Object.entries(staticFiles)) {
   app.get(route, (c) => {
     const full = path.join(PUBLIC_DIR, spec.file);
     if (!existsSync(full)) return c.text('not found: ' + spec.file, 404);
-    if (route !== '/') console.log(`ext feed: ${route} fetched`); // reinstall debugging
     return c.body(readFileSync(full), 200, { 'content-type': spec.type });
   });
 }
@@ -377,7 +378,10 @@ function setRecording(on: boolean): void {
   store.setSetting('recording_off_at', on ? '' : String(Date.now()));
 }
 
-app.get('/config', (c) => c.json({ recording: getRecording() }));
+app.get('/config', (c) => {
+  if (c.req.header('x-irecall-client') === 'extension') markExtensionSeen();
+  return c.json({ recording: getRecording(), extension: extensionState() });
+});
 
 app.post('/config', async (c) => {
   const body = await c.req.json<{ recording?: unknown }>().catch(() => null);
@@ -632,79 +636,65 @@ app.delete('/api/retention/:id', (c) => {
   return c.json({ deleted });
 });
 
-// --- extension reinstall ----------------------------------------------------------
-// Chrome force-installs the extension via a machine-level policy pointing at
-// updates.xml on this server. Removing the extension in Chrome sticks only when
-// that policy is gone; reinstall = repack CRX + rewrite policy + restart Chrome.
+// --- extension presence + setup ---------------------------------------------------
+// The extension pings /bootstrap (startup, token refresh) and /config (every
+// 1 min) with an x-irecall-client header; the tray polls the same routes
+// without it. Header presence = extension alive; last-seen lives in the
+// settings KV so "never connected" survives server restarts. Consumers: the
+// tray (warn icon + setup window) and the dashboard settings section, which
+// also offers /extension.zip for a manual (re)install.
 
-const PROJECT_ROOT = path.join(root, '..');
-const CHROME_POLICY = '/Library/Preferences/com.google.Chrome';
-const UPDATE_URL = `http://127.0.0.1:${PORT}/updates.xml`;
+const EXT_SEEN_KEY = 'ext_last_seen';
+const EXT_DISMISS_KEY = 'ext_setup_dismissed';
+const EXT_CONNECTED_MS = 5 * 60_000; // syncs every 1 min; 5 min grace
 
-function extId(): string | null {
-  const file = path.join(PUBLIC_DIR, 'updates.xml');
-  const xml = existsSync(file) ? readFileSync(file, 'utf8') : '';
-  return /\bappid="([a-p]{32})"/.exec(xml)?.[1] ?? null;
+function markExtensionSeen(): void {
+  const last = Number(store.getSetting(EXT_SEEN_KEY)) || 0;
+  const now = Date.now();
+  if (now - last < 30_000) return; // bootstrap + sync can land in the same minute
+  store.setSetting(EXT_SEEN_KEY, String(now));
 }
 
-// Unprivileged read works; missing key/domain = empty list.
-function policyEntries(): string[] {
-  const res = spawnSync('defaults', ['read', CHROME_POLICY, 'ExtensionInstallForcelist'], { encoding: 'utf8' });
-  if (res.status !== 0) return [];
-  return (res.stdout.match(/"[^"]*"/g) ?? []).map((s) => s.slice(1, -1));
-}
-
-function extStatus() {
-  const id = extId();
+function extensionState() {
+  const seen = Number(store.getSetting(EXT_SEEN_KEY)) || 0;
   return {
-    extId: id,
-    crx: existsSync(path.join(PUBLIC_DIR, 'irecall.crx')),
-    policyInstalled: id !== null && policyEntries().includes(`${id};${UPDATE_URL}`),
-    extPath: path.join(PROJECT_ROOT, 'extension'),
+    connected: seen > 0 && Date.now() - seen < EXT_CONNECTED_MS,
+    never: seen === 0,
+    dismissed: store.getSetting(EXT_DISMISS_KEY) === '1',
+    lastSeen: seen,
   };
 }
 
-function writePolicyCommand(entries: string[]): string {
-  return `defaults write ${CHROME_POLICY} ExtensionInstallForcelist -array ${entries.map((e) => `'${e}'`).join(' ')}`;
-}
+app.get('/api/extension', (c) => c.json({ ...extensionState(), extPath: path.join(root, '..', 'extension') }));
 
-app.get('/api/extension', (c) => c.json(extStatus()));
+app.post('/api/extension/dismiss', async (c) => {
+  const body = await c.req.json<{ dismissed?: unknown }>().catch(() => null);
+  if (!body || typeof body.dismissed !== 'boolean') return c.json({ error: 'dismissed: boolean' }, 400);
+  store.setSetting(EXT_DISMISS_KEY, body.dismissed ? '1' : '0');
+  return c.json(extensionState());
+});
 
-app.post('/api/extension/reinstall', (c) => {
-  // 1. rebuild bundle + repack CRX (pinned key keeps the extension ID stable).
-  // Blocking spawnSync: single-user local server, callers just wait.
-  for (const script of ['extension/build.mjs', 'scripts/pack-extension.mjs']) {
-    const res = spawnSync(process.execPath, [path.join(PROJECT_ROOT, script)], { cwd: PROJECT_ROOT, encoding: 'utf8' });
-    if (res.status !== 0) return c.json({ error: `${script} failed: ${(res.stderr || res.stdout).slice(-300)}` }, 500);
+// Zip of the unpacked extension dir (sibling of this server dir: repo checkout
+// in dev, Resources/binaries/extension in the .app) for Load-unpacked setups.
+app.get('/extension.zip', (c) => {
+  const dir = path.join(root, '..', 'extension');
+  if (!existsSync(path.join(dir, 'manifest.json'))) return c.text('extension dir not found: ' + dir, 404);
+  if (!existsSync(path.join(dir, 'dist', 'background.js'))) {
+    return c.text('extension not built — run: npm run build:ext', 500);
   }
-  const id = extId();
-  if (id === null) return c.json({ error: 'pack produced no updates.xml' }, 500);
-  // 2. merge + rewrite the force-install policy — only when actually missing,
-  // so a healthy setup doesn't get a surprise admin-password prompt. Chrome
-  // ≥137 honors this policy only on MDM/enterprise-managed browsers, so the
-  // message steers unmanaged setups to Load unpacked.
-  const all = policyEntries();
-  let sudoCommand: string | undefined;
-  let policyNote: string;
-  if (all.includes(`${id};${UPDATE_URL}`)) {
-    policyNote = 'force-install policy already present';
-  } else {
-    const entries = all.filter((e) => e.split(';')[0] !== id);
-    entries.push(`${id};${UPDATE_URL}`);
-    const cmd = writePolicyCommand(entries);
-    const osa = spawnSync('osascript', ['-e', `do shell script "${cmd}" with administrator privileges`], { encoding: 'utf8' });
-    if (osa.status === 0) {
-      policyNote = 'force-install policy written';
-    } else {
-      policyNote = 'force-install policy write needs admin';
-      sudoCommand = `sudo ${cmd}`;
-    }
+  const out = path.join(tmpdir(), `irecall-extension-${process.pid}.zip`);
+  const res =
+    process.platform === 'win32'
+      ? spawnSync('powershell', ['-NoProfile', '-Command', `Compress-Archive -Force -DestinationPath '${out}' -Path '${dir}\\*'`])
+      : spawnSync('zip', ['-r', '-q', out, '.', '-x', 'node_modules/*', '-x', '.hallmark/*'], { cwd: dir });
+  if (res.status !== 0 || !existsSync(out)) {
+    return c.text(`zip failed: ${(res.stderr || res.stdout || Buffer.alloc(0)).toString().slice(-200)}`, 500);
   }
-  return c.json({
-    ...extStatus(),
-    reinstalled: true,
-    sudoCommand,
-    message: `${policyNote}. Chrome ≥137 skips off-store force-install on unmanaged browsers — if the extension is missing, load unpacked: chrome://extensions → Developer mode → Load unpacked → ${path.join(PROJECT_ROOT, 'extension')}`,
+  const data = readFileSync(out);
+  rmSync(out, { force: true });
+  return c.body(data, 200, {
+    'content-type': 'application/zip',
+    'content-disposition': 'attachment; filename="irecall-extension.zip"',
   });
 });
 
@@ -807,12 +797,6 @@ mkdirSync(path.dirname(DB_PATH), { recursive: true });
 const server = serve({ fetch: app.fetch, port: PORT, hostname: '127.0.0.1' }, (info) => {
   console.log(`iRecall server on http://127.0.0.1:${info.port} (db: ${DB_PATH})`);
   console.log('status page: http://127.0.0.1:8787/');
-  const ext = extStatus();
-  if (!ext.crx || !ext.policyInstalled) {
-    console.log(
-      `extension not force-installed (crx ${ext.crx ? 'ok' : 'missing'}, policy ${ext.policyInstalled ? 'ok' : 'missing'}) — Chrome ≥137 honors the policy only on MDM-managed browsers; else load unpacked from ${ext.extPath}`
-    );
-  }
 });
 server.on('error', (err) => {
   console.error('server error:', err instanceof Error ? err.message : err);

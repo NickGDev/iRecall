@@ -229,7 +229,12 @@ async function reallyEnqueue(page: CaptureMsg['page'], tabId?: number): Promise<
 // Success/failure also feeds the toolbar icon's "server unreachable" state.
 async function fetchBootstrap(): Promise<boolean> {
   try {
-    const res = await fetch(`${SERVER}/bootstrap`, { signal: AbortSignal.timeout(5_000) });
+    // Client header lets the server tell extension pings apart from the
+    // tray's own /bootstrap + /config polling (drives its setup warning).
+    const res = await fetch(`${SERVER}/bootstrap`, {
+      headers: { 'x-irecall-client': 'extension' },
+      signal: AbortSignal.timeout(5_000),
+    });
     if (!res.ok) throw new Error(String(res.status));
     const data = (await res.json()) as { token?: string };
     if (typeof data.token === 'string' && data.token.length > 0) {
@@ -335,7 +340,7 @@ async function syncRecording(): Promise<void> {
   if (!token) return;
   try {
     const res = await fetch(`${SERVER}/config`, {
-      headers: { authorization: `Bearer ${token}` },
+      headers: { authorization: `Bearer ${token}`, 'x-irecall-client': 'extension' },
       signal: AbortSignal.timeout(5_000),
     });
     if (!res.ok) return;

@@ -12,12 +12,9 @@ server/.token
 server/data/
 server/dist/
 server/models/
-server/public/irecall.crx
-server/public/updates.xml
 server/server.log
 src-tauri/binaries/
 src-tauri/gen/
 src-tauri/target/
 Recall.app/
 Recall-app-*.zip
-server/public/recall.crx

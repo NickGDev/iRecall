@@ -56,7 +56,9 @@ toolchain needed):
    Gatekeeper). Everything is inside the bundle: node runtime, models,
    extension, menu-bar tray.
 3. Load the extension: `chrome://extensions` → Developer mode → **Load
-   unpacked** → `iRecall.app/Contents/Resources/binaries/extension`.
+   unpacked** → `~/Library/Application Support/iRecall/extension` (the app
+   prepares this folder on launch and shows a setup window on first run —
+   its "Show in Finder" button opens it).
 
 That's it — an **iR** glyph appears in your menu bar; open it for live
 status. Read stuff,
@@ -64,16 +66,16 @@ then open <http://127.0.0.1:8787> and search your brain. Data lives in
 `~/Library/Application Support/iRecall/` and survives app replacement.
 Start-at-login: System Settings → General → Login Items → add iRecall.
 
-**From source** (dev / CRX force-install flow):
+**From source** (dev):
 
 ```bash
 ./scripts/install-mac.sh
 ```
 
-Asks for your admin password once — the extension force-installs via Chrome's
-`ExtensionInstallForcelist` policy (quit + reopen Chrome after). The installer
-also sets up LaunchAgents (server + tray auto-start at login, auto-restart on
+Sets up LaunchAgents (server + tray auto-start at login, auto-restart on
 crash) and caches models under `server/models` — fully offline after install.
+The tray shows the extension setup window on first run; dismiss it once and
+it stays dismissed.
 
 <details>
 <summary><strong>🛠️ What the source install sets up</strong></summary>
@@ -87,18 +89,18 @@ crash) and caches models under `server/models` — fully offline after install.
     ~10–75 ms per page on CPU. ONNX exported locally via
     `scripts/julia15-export/`. Tune with `JULIA_THRESHOLD` (default 0.5),
     disable with `JULIA_DISABLE=1` (fail-open)
-- **Extension** signed as CRX3 with a locally generated key (`keys/irecall-key.pem`,
-  stable ID `cafcekahohdjjdgongnpbbigkgccokec`), served from
-  `http://127.0.0.1:8787/updates.xml`; it fetches its auth token from
-  `/bootstrap` — no manual paste
+- **Extension** built unpacked (`npm run build:ext`); it fetches its auth
+  token from `/bootstrap` — no manual paste. The server tracks its check-ins
+  (x-irecall-client header) so the tray can warn when it's missing
 - **iRecall.app** tray (Rust/Tauri, menu-bar accessory app): template `iR`
-  monogram icon. Menu: status, Open Dashboard,
+  monogram icon (yellow-badged warning variant while the extension is
+  missing). Menu: status, Set Up Chrome Extension…, Open Dashboard,
   Pause/Resume, Quit. LaunchAgent `dev.irecall.tray`. The recording flag lives
   on the server (`/config`) — tray, dashboard, and popup all write there; the
   extension mirrors it within ~60s
 
-Repack after extension changes: `npm run build:ext && npm run pack:ext` (bump
-`version` in `manifest.json` so Chrome auto-updates the force-installed copy).
+Reload after extension changes: `chrome://extensions` → ↻ on the iRecall card
+(`npm run build:ext` first).
 
 Verify everything:
 
@@ -148,9 +150,9 @@ or *"summarize everything I've read about MCP servers, newest first"*.
   (mode 600; FileVault protects at rest). A Host-allowlist middleware rejects
   non-loopback Host headers, closing DNS rebinding.
 - **Auth:** bearer token gates `/ingest`, `/search`, `/recent`, `/pages/:id`,
-  `/stats`. Open routes: `/health`, `/bootstrap`, `/`, `/updates.xml`,
-  `/irecall.crx` (Chrome's updater needs those). The token defends against
-  *web pages*, not local processes — same machine = trusted.
+  `/stats`. Open routes: `/health`, `/bootstrap`, `/`, `/extension.zip`. The
+  token defends against *web pages*, not local processes — same machine =
+  trusted.
 - **Never captured:** pages with password fields, blocked domains, incognito,
   extracted text under 250 chars.
 - **Pause is real:** enforced at the server sink (`recording_off_at` — pages
@@ -163,18 +165,14 @@ or *"summarize everything I've read about MCP servers, newest first"*.
   confirming each action.
 - **Delete everything:** per-page, per-domain, and time-window wipes
   (24h/7d/30d/all), plus a retention dropdown that auto-purges hourly.
-- **Force-install caveat:** Chrome won't let you remove a policy-installed
-  extension from `chrome://extensions` (that's the point). Remove via
-  `defaults delete com.google.Chrome ExtensionInstallForcelist` + Chrome
-  restart. The installer merges into any existing forcelist, never replaces.
 
 <details>
 <summary><strong>🧱 Architecture</strong></summary>
 
 ```
-Chrome ext (MV3, force-installed)   Local server (127.0.0.1:8787, LaunchAgent)
+Chrome ext (MV3, load unpacked)     Local server (127.0.0.1:8787, LaunchAgent)
 ├─ spy.js (MAIN world)              ├─ open: /health /bootstrap / (status page)
-│   └─ history API hook (SPA nav)   │        /updates.xml /irecall.crx
+│   └─ history API hook (SPA nav)   │        /extension.zip
 ├─ content.js (isolated)            ├─ auth: /ingest /search /recent /stats
 │   ├─ gates: paused / blocked      ├─ SQLite (WAL) + FTS5 + page_vectors
 │   │   domains, password fields    │   (brute-force cosine KNN over blobs —
@@ -224,9 +222,7 @@ Pushing a `v*` tag runs the release workflow:
 - **release** — attaches the per-platform bundles + `irecall-models.tar.gz`
   (re-attached each release so the chain propagates) + SHA256SUMS.
 
-No keys are stored in the repo or CI; the CRX key is generated on your machine
-(`npm run pack:ext` creates `keys/irecall-key.pem` on first use) for the
-pinned-ID CRX.
+No keys are stored in the repo or CI.
 
 </details>
 

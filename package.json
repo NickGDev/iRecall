@@ -10,7 +10,6 @@
     "mcp": "tsx mcp/src/main.ts",
     "build:ext": "node extension/build.mjs",
     "download:model": "tsx scripts/download-model.mjs",
-    "pack:ext": "node scripts/pack-extension.mjs",
     "install:mac": "bash scripts/install-mac.sh",
     "typecheck": "tsc --noEmit"
   },

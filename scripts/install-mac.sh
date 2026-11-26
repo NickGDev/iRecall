@@ -1,6 +1,7 @@
 #!/bin/bash
-# iRecall — one-shot mac installer: deps, model, extension CRX + update feed,
-# LaunchAgent auto-start, Chrome force-install policy.
+# iRecall — one-shot mac installer: deps, model, extension build, LaunchAgent
+# auto-start. Extension setup is Load-unpacked; the tray app walks the user
+# through it on first run (Chrome blocks off-store auto-install).
 set -euo pipefail
 
 PROJECT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -21,11 +22,8 @@ cd "$PROJECT" && npm install --no-fund --no-audit
 echo "-- download embedding model"
 node scripts/download-model.mjs
 
-echo "-- build + pack extension"
+echo "-- build extension"
 npm run build:ext
-node scripts/pack-extension.mjs
-EXT_ID="$(sed -n 's/.*appid="\([a-p]\{32\}\)".*/\1/p' "$PROJECT/server/public/updates.xml")"
-echo "extension id: $EXT_ID"
 
 echo "-- tray app (Tauri shell)"
 # Cross-platform Rust tray (src-tauri) built by scripts/build-app.sh; build
@@ -112,27 +110,7 @@ launchctl bootstrap "gui/$UID_N" "$TRAY_PLIST" 2>/dev/null || true
 launchctl kickstart "gui/$UID_N/dev.irecall.tray" 2>/dev/null || open -a iRecall
 echo "tray: launched"
 
-echo "-- Chrome force-install policy (requires admin password)"
-# Machine-level policy (root-owned /Library/Preferences): the only policy tier
-# that may still fetch self-hosted CRX on Chrome 137+. Merge into any existing
-# forcelist instead of replacing it; dedupe by extension id.
-EXISTING="$(sudo defaults read /Library/Preferences/com.google.Chrome ExtensionInstallForcelist 2>/dev/null | grep -o '"[^"]*"' | tr -d '"' || true)"
-ENTRIES=()
-for e in $EXISTING; do
-  [ -n "$e" ] || continue
-  [ "${e%%;*}" = "$EXT_ID" ] && continue
-  ENTRIES+=("$e")
-done
-ENTRIES+=("$EXT_ID;http://127.0.0.1:8787/updates.xml")
-if sudo defaults write /Library/Preferences/com.google.Chrome ExtensionInstallForcelist -array "${ENTRIES[@]}"; then
-  echo "policy written (device-level ExtensionInstallForcelist, ${#ENTRIES[@]} entry/entries)"
-else
-  echo "WARNING: could not write Chrome policy (no admin rights?)"
-  echo "  fallback: chrome://extensions -> Developer mode -> Load unpacked -> $PROJECT/extension"
-fi
-
 echo "== done =="
-echo "1. quit Chrome fully and reopen"
-echo "   Chrome ≥137 honors force-install only on MDM-managed browsers —"
-echo "   if the extension doesn't appear: chrome://extensions -> Developer mode"
-echo "   -> Load unpacked -> $PROJECT/extension"
+echo "1. the tray shows a setup window on first run — open chrome://extensions,"
+echo "   enable Developer mode, Load unpacked ->"
+echo "   ~/Library/Application Support/iRecall/extension"
