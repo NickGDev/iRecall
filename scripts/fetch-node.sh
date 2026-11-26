@@ -44,11 +44,15 @@ if [ "$EXT" = tar.gz ]; then
   tar -xzf "$TMP/$ARCHIVE.$EXT" -C "$TMP"
   cp "$TMP/$ARCHIVE/bin/node" "$DEST"
 else
-  # git-bash: powershell for the zip (unzip not guaranteed on runners)
+  # git-bash on runners: unzip when present, else the system bsdtar (reads
+  # zips by magic; Expand-Archive fails under MSYS-injected PSModulePath).
   P_IN="$(cygpath -w "$TMP/$ARCHIVE.zip" 2>/dev/null || echo "$TMP/$ARCHIVE.zip")"
   P_OUT="$(cygpath -w "$TMP/x" 2>/dev/null || echo "$TMP/x")"
-  powershell.exe -NoProfile -Command "Expand-Archive -Force -LiteralPath '$P_IN' -DestinationPath '$P_OUT'" ||
+  if command -v unzip >/dev/null 2>&1; then
     unzip -q "$TMP/$ARCHIVE.zip" -d "$TMP/x"
+  else
+    "/c/Windows/System32/tar.exe" -xf "$P_IN" -C "$P_OUT"
+  fi
   cp "$TMP/x/$ARCHIVE/node.exe" "$DEST"
 fi
 chmod 755 "$DEST"
