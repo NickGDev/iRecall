@@ -441,8 +441,8 @@
         <div class="panel" style="padding: var(--space-md)">
           <h3 class="tab-head" id="form-title" style="font-size: 17px">New rule</h3>
           <div class="field">
-            <label class="label" for="f-domain">Scope, domain (blank means all sites)</label>
-            <input type="text" id="f-domain" placeholder="e.g. reddit.com" />
+            <label class="label" for="rf-domain">Scope, domain (blank means all sites)</label>
+            <input type="text" id="rf-domain" placeholder="e.g. reddit.com" />
           </div>
           <div class="field">
             <label class="label" for="f-topics">Topics, one description per line, written like search queries for pages worth keeping</label>
@@ -900,7 +900,7 @@
       let editingId = null;
       function formPayload() {
         return {
-          domain: $('f-domain').value.trim() || null,
+          domain: $('rf-domain').value.trim() || null,
           topics: $('f-topics').value,
           keywords: $('f-keywords').value,
           threshold: Number($('f-threshold').value),
@@ -909,12 +909,12 @@
       function loadForm(rule) {
         editingId = rule ? rule.id : null;
         $('form-title').textContent = rule ? 'Editing rule #' + rule.id : 'New rule';
-        $('f-domain').value = rule ? rule.domain || '' : '';
+        $('rf-domain').value = rule ? rule.domain || '' : '';
         $('f-topics').value = rule ? rule.topics.join('\n') : '';
         $('f-keywords').value = rule ? rule.keywords.join(', ') : '';
         $('f-threshold').value = rule ? rule.threshold : 0.35;
         $('threshold-val').textContent = Number($('f-threshold').value).toFixed(2);
-        if (rule) $('f-domain').focus();
+        if (rule) $('rf-domain').focus();
       }
       // Example presets: click fills the form (domain + threshold untouched).
       // "software" mirrors the owner's own focus rule verbatim.
