@@ -137,7 +137,7 @@
     <div class="err" id="err"></div>
     <script>
       const err = (m) => (document.getElementById('err').textContent = m || '');
-      const tauri = window.__TAURI;
+      const tauri = window.__TAURI__;
       document.getElementById('open-ext').addEventListener('click', () => {
         err('');
         tauri.core.invoke('open_chrome_extensions').catch((e) => err(String(e)));

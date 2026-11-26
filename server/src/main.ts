@@ -120,6 +120,33 @@ app.get('/bootstrap', (c) => {
   return c.json({ token });
 });
 
+// Zip of the unpacked extension dir (sibling of this server dir: repo checkout
+// in dev, Resources/binaries/extension in the .app) for Load-unpacked setups.
+// Open route BEFORE auth: the dashboard's Download .zip anchor is plain browser
+// navigation, which sends no Authorization header — behind auth it 401s by
+// construction. The Host allowlist above already restricts this to loopback.
+app.get('/extension.zip', (c) => {
+  const dir = path.join(root, '..', 'extension');
+  if (!existsSync(path.join(dir, 'manifest.json'))) return c.text('extension dir not found: ' + dir, 404);
+  if (!existsSync(path.join(dir, 'dist', 'background.js'))) {
+    return c.text('extension not built — run: npm run build:ext', 500);
+  }
+  const out = path.join(tmpdir(), `irecall-extension-${process.pid}.zip`);
+  const res =
+    process.platform === 'win32'
+      ? spawnSync('powershell', ['-NoProfile', '-Command', `Compress-Archive -Force -DestinationPath '${out}' -Path '${dir}\\*'`])
+      : spawnSync('zip', ['-r', '-q', out, '.', '-x', 'node_modules/*', '-x', '.hallmark/*'], { cwd: dir });
+  if (res.status !== 0 || !existsSync(out)) {
+    return c.text(`zip failed: ${(res.stderr || res.stdout || Buffer.alloc(0)).toString().slice(-200)}`, 500);
+  }
+  const data = readFileSync(out);
+  rmSync(out, { force: true });
+  return c.body(data, 200, {
+    'content-type': 'application/zip',
+    'content-disposition': 'attachment; filename="irecall-extension.zip"',
+  });
+});
+
 const staticFiles: Record<string, { file: string; type: string }> = {
   '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/rules': { file: 'rules.html', type: 'text/html; charset=utf-8' },
@@ -672,30 +699,6 @@ app.post('/api/extension/dismiss', async (c) => {
   if (!body || typeof body.dismissed !== 'boolean') return c.json({ error: 'dismissed: boolean' }, 400);
   store.setSetting(EXT_DISMISS_KEY, body.dismissed ? '1' : '0');
   return c.json(extensionState());
-});
-
-// Zip of the unpacked extension dir (sibling of this server dir: repo checkout
-// in dev, Resources/binaries/extension in the .app) for Load-unpacked setups.
-app.get('/extension.zip', (c) => {
-  const dir = path.join(root, '..', 'extension');
-  if (!existsSync(path.join(dir, 'manifest.json'))) return c.text('extension dir not found: ' + dir, 404);
-  if (!existsSync(path.join(dir, 'dist', 'background.js'))) {
-    return c.text('extension not built — run: npm run build:ext', 500);
-  }
-  const out = path.join(tmpdir(), `irecall-extension-${process.pid}.zip`);
-  const res =
-    process.platform === 'win32'
-      ? spawnSync('powershell', ['-NoProfile', '-Command', `Compress-Archive -Force -DestinationPath '${out}' -Path '${dir}\\*'`])
-      : spawnSync('zip', ['-r', '-q', out, '.', '-x', 'node_modules/*', '-x', '.hallmark/*'], { cwd: dir });
-  if (res.status !== 0 || !existsSync(out)) {
-    return c.text(`zip failed: ${(res.stderr || res.stdout || Buffer.alloc(0)).toString().slice(-200)}`, 500);
-  }
-  const data = readFileSync(out);
-  rmSync(out, { force: true });
-  return c.body(data, 200, {
-    'content-type': 'application/zip',
-    'content-disposition': 'attachment; filename="irecall-extension.zip"',
-  });
 });
 
 // --- idle-aware background worker -------------------------------------------------

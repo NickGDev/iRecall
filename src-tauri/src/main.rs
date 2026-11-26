@@ -32,6 +32,7 @@ struct ExtState {
     connected: bool,
     never: bool,
     dismissed: bool,
+    last_seen: i64,
 }
 
 fn ext_of(config: &serde_json::Value) -> Option<ExtState> {
@@ -40,6 +41,7 @@ fn ext_of(config: &serde_json::Value) -> Option<ExtState> {
         connected: e.get("connected")?.as_bool()?,
         never: e.get("never")?.as_bool()?,
         dismissed: e.get("dismissed")?.as_bool()?,
+        last_seen: e.get("lastSeen").and_then(|v| v.as_i64()).unwrap_or(0),
     })
 }
 
@@ -277,6 +279,7 @@ fn poller(app: AppHandle, quitting: Arc<AtomicBool>, ui: Arc<Mutex<UiState>>, it
         let healthy = health_ok();
         let status_text;
         let toggle_text;
+        let tooltip;
         // warn/closing/auto_open are read after the lock block.
         let warn;
         let mut auto_open = false;
@@ -299,19 +302,34 @@ fn poller(app: AppHandle, quitting: Arc<AtomicBool>, ui: Arc<Mutex<UiState>>, it
             }
             st.healthy = healthy;
             warn = healthy && is_warn(st.ext);
-            // First install (extension never seen, user never dismissed):
-            // surface the setup window once per launch instead of waiting for
-            // the user to notice the badge.
-            if healthy && st.ext.is_some_and(|e| e.never && !e.dismissed) && !st.setup_prompted {
+            // Extension missing (first install OR removed/stale) and not
+            // dismissed: surface the setup window once per launch instead of
+            // waiting for the user to notice the badge.
+            if healthy && is_warn(st.ext) && !st.setup_prompted {
                 st.setup_prompted = true;
                 auto_open = true;
             }
             status_text = if !healthy {
                 "Server down".to_string()
+            } else if st.ext.is_none() {
+                // /config answered without an extension field: the running
+                // server predates the setup flow. Never silent-normal.
+                "Server outdated — update & restart iRecall".to_string()
             } else if st.recording {
                 "Recording — pages kept locally".to_string()
             } else {
                 "Paused — not capturing".to_string()
+            };
+            tooltip = if warn {
+                Some(if st.ext.is_some_and(|e| e.never) {
+                    "iRecall — set up the Chrome extension".to_string()
+                } else {
+                    "iRecall — extension not checking in (Chrome closed?)".to_string()
+                })
+            } else if st.ext.is_none() {
+                Some("iRecall — server outdated; extension state unknown".to_string())
+            } else {
+                None
             };
             toggle_text = if st.recording {
                 "Pause Recording".to_string()
@@ -328,7 +346,10 @@ fn poller(app: AppHandle, quitting: Arc<AtomicBool>, ui: Arc<Mutex<UiState>>, it
         let _ = app.run_on_main_thread(move || {
             let _ = it.status.set_text(status_text);
             let _ = it.toggle.set_text(toggle_text);
-            let _ = it.setup.set_enabled(warn);
+            // Always enabled: opening the setup window is harmless in every
+            // state, and a greyed item is how "server too old for extension
+            // state" used to masquerade as a dead click.
+            let _ = it.setup.set_enabled(true);
             // Warning icon ships in full color (non-template) so the yellow
             // badge survives tinting on light + dark menu bars.
             let icon = if warn {
@@ -339,11 +360,7 @@ fn poller(app: AppHandle, quitting: Arc<AtomicBool>, ui: Arc<Mutex<UiState>>, it
             let _ = it.tray.set_icon(Some(icon));
             #[cfg(target_os = "macos")]
             let _ = it.tray.set_icon_as_template(!warn);
-            let _ = it.tray.set_tooltip(if warn {
-                Some("iRecall — set up the Chrome extension")
-            } else {
-                None
-            });
+            let _ = it.tray.set_tooltip(tooltip);
             if auto_open {
                 open_setup_window(&app_for_ui);
             }
