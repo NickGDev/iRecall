@@ -114,6 +114,9 @@ jobs:
             gh release download -p 'recall-models.tar.gz' -O dist/irecall-models.tar.gz --clobber
       - name: Checksums
         run: |
+          # upload-path globs can nest a src-tauri/ dir into dist — flatten
+          find dist -mindepth 2 -type f -exec mv {} dist/ \;
+          find dist -mindepth 1 -type d -empty -delete
           cd dist
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
