@@ -23,6 +23,10 @@ about SQLite tuning I read last month?" — from a dashboard or straight from
 Claude via MCP. One install for macOS, Windows and Linux; light enough that
 you'll forget it's running.
 
+> Coding agent or LLM working in this repo? Start at
+> [AGENTS.md](AGENTS.md) — verify loop, hard rules, and design dogma in
+> [docs/dogma/](docs/dogma/).
+
 ## ✨ What it does
 
 - 📖 **Captures what you read, not screenshots** — clean article text extracted
