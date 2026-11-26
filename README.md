@@ -5,19 +5,23 @@
 <p align="center">
   <a href="https://github.com/NickGDev/iRecall/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/NickGDev/iRecall?style=flat-square&label=latest%20release"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square"></a>
-  <img alt="macOS 14+ Apple silicon" src="https://img.shields.io/badge/macOS-14%2B%20Apple%20silicon-black?style=flat-square&logo=apple&logoColor=white">
+  <img alt="macOS" src="https://img.shields.io/badge/macOS-14%2B-black?style=flat-square&logo=apple&logoColor=white">
+  <img alt="Windows" src="https://img.shields.io/badge/Windows-10%2B-blue?style=flat-square&logo=windows&logoColor=white">
+  <img alt="Linux" src="https://img.shields.io/badge/Linux-x64%20%7C%20arm64-yellow?style=flat-square&logo=linux&logoColor=black">
   <img alt="100% local" src="https://img.shields.io/badge/cloud-none%2C%20100%25%20local-3ddc97?style=flat-square">
+  <img alt="lightweight" src="https://img.shields.io/badge/footprint-one%20process%2C%20no%20GPU-9cf?style=flat-square">
 </p>
 
 **Your browser remembers every tab you opened. iRecall remembers what you
-actually *read* — privately, on your Mac, in clean full text your agents can
-search.**
+actually *read* — privately, on your own machine, in clean full text your
+agents can search.**
 
 It's a Chrome extension + a little local server. While you browse, it keeps
 structured copies of pages worth keeping, filters out the junk with a small
 on-device model, embeds everything locally, and answers "what was that article
 about SQLite tuning I read last month?" — from a dashboard or straight from
-Claude via MCP.
+Claude via MCP. One install for macOS, Windows and Linux; light enough that
+you'll forget it's running.
 
 ## ✨ What it does
 
@@ -35,6 +39,25 @@ Claude via MCP.
 - 🔒 **Local or nothing** — server binds `127.0.0.1` only, data lives in
   SQLite on your disk, models run in-process (ONNX). No accounts, no cloud
   APIs, no telemetry.
+
+## 🪶 Lightweight, async by design
+
+Built to disappear on your machine — no GPU, no Python, no Docker, no
+Electron:
+
+- **Captures are buffered, not streamed.** The extension batches pages in
+  `storage.session` and flushes at 5 pages or 30 s; scroll-growth re-checks
+  run on a 60 s poll. Nothing spins while you read.
+- **Heavy work waits for idle.** The server's background worker ticks every
+  30 s and runs only when the machine is quiet (loadavg-gated): embedding
+  drain, focus sweeps and retention purges all happen while you're away.
+  A never-idle machine just degrades to keyword-only search — never to churn.
+- **Small models, millisecond decisions.** A 47M-param embedder and a 144M
+  keep/drop gate, both CPU-only in-process — ~10–75 ms per page, well under
+  a second of work for a whole day of browsing.
+- **One process, one glyph.** A single Node server (384 MB heap cap) behind
+  a menu-bar/tray accessory app. Storage is one SQLite file (WAL). That's
+  the whole footprint — it starts with your session and stays out of the way.
 
 ## 📸 Screenshots
 
@@ -105,7 +128,8 @@ Reload after extension changes: `chrome://extensions` → ↻ on the iRecall car
 Verify everything:
 
 ```bash
-npm run selfcheck    # 15 assertions: dedup, FTS, semantic, temporal, deletes
+npm run selfcheck    # 131 assertions + 40-query golden eval: dedup, FTS,
+                     # semantic, temporal, deletes, filters, retention
 curl 127.0.0.1:8787/health
 ```
 
