@@ -68,6 +68,7 @@ jobs:
       - name: Fetch model bundle from previous latest release (or HF for granite)
         env:
           IRECALL_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: bash scripts/fetch-models.sh
       - name: Stage runtime (node sidecar + server tree + extension)
         run: bash scripts/stage-runtime.sh "${{ matrix.triple }}"
