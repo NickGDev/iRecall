@@ -16,7 +16,7 @@ await Promise.all([
 ]);
 
 // --- icons -------------------------------------------------------------------
-// Grey square with a white R; overlays drawn bottom-right: orange "!" (server
+// Grey square with a white iR monogram; overlays drawn bottom-right: orange "!" (server
 // unreachable), red stop octagon (site blocked). Shapes live on a 16-unit grid,
 // rasterized at 8x supersampling and box-downsampled for antialiasing. PNGs are
 // encoded by hand (zlib) so the build stays dependency-free.
@@ -134,27 +134,35 @@ function iconCanvas(size) {
   return { fillRect, fillLine, fillOct, downsample };
 }
 
-function paintR(cv) {
-  cv.fillRect(4.2, 3.6, 6.2, 12.4, WHITE); // stem
-  cv.fillRect(4.2, 3.6, 10.6, 5.7, WHITE); // top of bowl
-  cv.fillRect(8.6, 3.6, 10.6, 8.9, WHITE); // right of bowl
-  cv.fillRect(4.2, 7.0, 10.6, 8.9, WHITE); // middle bar closes the bowl
-  cv.fillLine(7.4, 8.9, 11.6, 12.4, 1.05, WHITE); // leg
+function paintR(cv, dx = 0) {
+  cv.fillRect(4.2 + dx, 3.6, 6.2 + dx, 12.4, WHITE); // stem
+  cv.fillRect(4.2 + dx, 3.6, 10.6 + dx, 5.7, WHITE); // top of bowl
+  cv.fillRect(8.6 + dx, 3.6, 10.6 + dx, 8.9, WHITE); // right of bowl
+  cv.fillRect(4.2 + dx, 7.0, 10.6 + dx, 8.9, WHITE); // middle bar closes the bowl
+  cv.fillLine(7.4 + dx, 8.9, 11.6 + dx, 12.4, 1.05, WHITE); // leg
 }
 
-// 16px gets a pixel-font R: the vector R's counter (bowl hole) is sub-pixel
+// lowercase i, drawn left of the R for the iRecall monogram
+function paintI(cv) {
+  cv.fillRect(2.6, 5.4, 3.7, 12.4, WHITE); // stem
+  cv.fillRect(2.6, 3.0, 3.7, 4.3, WHITE); // dot
+}
+
+// 16px gets a pixel-font iR: the vector R's counter (bowl hole) is sub-pixel
 // at 16 and its leg lands exactly where the corner overlays sit, so the small
 // size uses a chunky glyph shifted left/up, keeping the corner free.
-function paintRSmall(cv) {
+function paintIRSmall(cv) {
   const P = (c, r, w) => cv.fillRect(4 + c, 4 + r, 4 + c + w, 4 + r + 1, WHITE);
-  for (const r of [0, 3]) P(0, r, 4); // top bar / mid bar
-  for (const r of [1, 2, 4, 5, 6, 7]) P(0, r, 1); // stem
-  for (const r of [1, 2, 5]) P(3, r, 1); // right of bowl
+  P(0, 0, 1); // i dot
+  for (const r of [2, 3, 4, 5, 6, 7]) P(0, r, 1); // i stem (row 1 = gap under dot)
+  for (const r of [0, 3]) P(2, r, 4); // R top bar / mid bar
+  for (const r of [1, 2, 4, 5, 6, 7]) P(2, r, 1); // R stem
+  for (const r of [1, 2]) P(5, r, 1); // right of bowl
   for (const [c, r] of [
-    [2, 4],
-    [3, 5],
-    [4, 6],
-    [5, 7],
+    [4, 4],
+    [5, 5],
+    [6, 6],
+    [7, 7],
   ])
     P(c, r, 1); // leg
 }
@@ -162,8 +170,11 @@ function paintRSmall(cv) {
 function drawIcon(size, overlay) {
   const cv = iconCanvas(size);
   cv.fillRect(0, 0, 16, 16, GREY);
-  if (size === 16) paintRSmall(cv);
-  else paintR(cv);
+  if (size === 16) paintIRSmall(cv);
+  else {
+    paintI(cv);
+    paintR(cv, 0.8);
+  }
   if (overlay === 'err') {
     cv.fillRect(10.55, 7.0, 13.65, 11.2, WHITE); // white halo
     cv.fillRect(10.55, 11.2, 13.65, 13.75, WHITE);
