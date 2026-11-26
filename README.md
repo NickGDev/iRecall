@@ -156,6 +156,11 @@ or *"summarize everything I've read about MCP servers, newest first"*.
 - **Pause is real:** enforced at the server sink (`recording_off_at` — pages
   captured before a pause lands are dropped, pre-pause buffers still arrive).
   Popup shows it instantly; the server is the source of truth.
+- **Agent content is untrusted:** captured pages are third-party web text, and
+  pages can contain instructions aimed at agents. The MCP labels page content
+  as untrusted data — don't pair iRecall reads with write-capable tools
+  (shell, email, filesystem, or iRecall's own `teach_page`) without
+  confirming each action.
 - **Delete everything:** per-page, per-domain, and time-window wipes
   (24h/7d/30d/all), plus a retention dropdown that auto-purges hourly.
 - **Force-install caveat:** Chrome won't let you remove a policy-installed

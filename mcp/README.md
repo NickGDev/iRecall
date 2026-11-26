@@ -15,7 +15,10 @@ the embedding model. Single DB writer and all validation stay server-side.
 `search_history` / `recent_history` results carry the temporal annotations
 (`ageDays`, `supersededBy`, `stale`) so agents can weigh freshness. `get_page`
 truncates content at 20,000 chars to protect the agent context window (full
-text stays in the DB).
+text stays in the DB) and wraps it in an untrusted-content envelope (advisory
+— pages can forge delimiters) — page text is third-party data, never
+instructions. Don't run this MCP alongside write-capable tools (shell, email,
+filesystem, `teach_page`) without confirming actions.
 
 ## Run / register
 
