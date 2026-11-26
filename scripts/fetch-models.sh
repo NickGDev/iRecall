@@ -13,6 +13,9 @@ needs_julia()   { [ ! -f "$JULIA" ]; }
 needs_granite() { [ ! -f "$GRANITE_DIR/onnx/model_quantized.onnx" ]; }
 
 if needs_julia || needs_granite; then
+  # Fresh CI checkout has no server/models tree (gitignored) — the release-tar
+  # extraction and the granite curl -o targets below both need it.
+  mkdir -p server/models "$GRANITE_DIR" "$GRANITE_DIR/onnx"
   REPO="${IRECALL_REPO:-}"
   if [ -z "$REPO" ] && command -v gh >/dev/null 2>&1; then
     REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)
