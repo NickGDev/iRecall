@@ -108,7 +108,7 @@ app.use('*', async (c, next) => {
 
 // --- open routes (before auth): static feed + health + bootstrap ----------------
 
-app.get('/health', (c) => c.json({ ok: true, version: '0.3.0' }));
+app.get('/health', (c) => c.json({ ok: true, version: '0.3.1' }));
 
 // Pre-wiring for the extension: hands out the local token without manual paste.
 // No CORS headers + the Host allowlist above mean web pages cannot read
