@@ -67,29 +67,49 @@ function extractPage(): ExtractedPage | null {
   };
 }
 
-async function capture(reason: string): Promise<void> {
+// Scroll coverage: SPA feeds (LinkedIn etc.) never navigate — the URL stays
+// and readable text grows as you scroll. Periodic growth-only re-captures
+// turn long scroll sessions into a chain of evolving snapshots; the server
+// dedups identical content and inserts same-day changed content as new
+// (superseded-linked) rows.
+const GROWTH_POLL_MS = 60_000;
+const GROWTH_MIN_CHARS = 1500;
+let lastCapturedLen = 0;
+
+async function capture(reason: string, opts: { growth?: boolean } = {}): Promise<void> {
   if (!location.protocol.startsWith('http')) return;
   const cfg = await getConfig();
   if (!cfg.enabled) return;
   const host = location.hostname;
-  if (hostMatches(host, cfg.blockedDomains) && !hostMatches(host, cfg.allowedDomains)) {
-    await chrome.runtime.sendMessage({ type: 'state', state: 'skipped', host, reason: 'blocked' });
+  const blocked = hostMatches(host, cfg.blockedDomains) && !hostMatches(host, cfg.allowedDomains);
+  // Growth polls stay silent on the skip paths — no badge flapping while you
+  // sit on a login/blocked page for minutes.
+  if (blocked) {
+    if (!opts.growth) {
+      await chrome.runtime.sendMessage({ type: 'state', state: 'skipped', host, reason: 'blocked' });
+    }
     return;
   }
   if (document.querySelector('input[type=password]')) {
     // Login form heuristic: skip capture, mark tab. ponytail: false-positive
     // ceiling = pages with hidden password fields; upgrade = visibility check.
-    await chrome.runtime.sendMessage({ type: 'state', state: 'skipped', host, reason: 'password' });
+    if (!opts.growth) {
+      await chrome.runtime.sendMessage({ type: 'state', state: 'skipped', host, reason: 'password' });
+    }
     return;
   }
   const page = extractPage();
   if (!page || page.content.length < MIN_CHARS) {
     // Tell the worker so the badge + popup can say why nothing was kept.
-    await chrome.runtime.sendMessage({ type: 'state', state: 'skipped', host, reason: 'thin' });
+    if (!opts.growth) {
+      await chrome.runtime.sendMessage({ type: 'state', state: 'skipped', host, reason: 'thin' });
+    }
     return;
   }
+  if (opts.growth && page.content.length < lastCapturedLen + GROWTH_MIN_CHARS) return;
   try {
     await chrome.runtime.sendMessage({ type: 'capture', page: { ...page, reason } });
+    lastCapturedLen = page.content.length;
   } catch {
     // worker unreachable: nothing buffered here, next page retries
   }
@@ -137,3 +157,12 @@ chrome.runtime.onMessage.addListener((msg: { type?: string }, _sender, sendRespo
 });
 
 capture('load');
+
+// Growth poll — visible tabs only; doubles as a missed-nav safety net since
+// it always captures at the current location.href.
+setInterval(() => {
+  if (document.hidden) return;
+  if (!location.protocol.startsWith('http')) return;
+  if (document.querySelector('input[type=password]')) return;
+  void capture('growth', { growth: true });
+}, GROWTH_POLL_MS);
