@@ -113,7 +113,27 @@ window.addEventListener('pageshow', (e) => {
 // user intent outranks the thin/blocked heuristics.
 chrome.runtime.onMessage.addListener((msg: { type?: string }, _sender, sendResponse) => {
   if (msg?.type !== 'teach') return;
-  sendResponse(extractPage());
+  const page = extractPage();
+  if (page && page.content.length > 0) {
+    sendResponse(page);
+    return;
+  }
+  // Readability loses on app-shell pages (LinkedIn feed after scroll, etc.).
+  // Explicit user intent: fall back to raw visible text rather than refuse.
+  const text = (document.body?.innerText ?? '').trim();
+  sendResponse(
+    text.length > 0
+      ? {
+          url: location.href,
+          title: document.title || null,
+          content: text,
+          excerpt: null,
+          byline: null,
+          dwellMs: Math.round(performance.now() - viewStart),
+          capturedAt: Date.now(),
+        }
+      : null
+  );
 });
 
 capture('load');

@@ -182,6 +182,15 @@ const docId = v2hits[0]!.id;
 assert(store.deletePage(docId) === 1, 'id delete works');
 assert(store.stats().embedded === 8, 'vector rows cascade-deleted');
 
+// domain filter www-tolerance: users type the bare domain, captures store
+// the full host (linkedin.com vs www.linkedin.com was a zero-hit trap)
+store.ingest([{ url: 'https://www.example-x.com/post', title: 'x post', content: 'example-x www tolerance capture. '.repeat(20) }]);
+await store.flushEmbeddings();
+const wwwHits = await store.search({ q: 'www tolerance capture', domain: 'example-x.com' });
+assert(wwwHits.length === 1 && wwwHits[0]!.domain === 'www.example-x.com', 'domain filter www-tolerant (bare input)');
+const wwwHits2 = await store.search({ q: 'www tolerance capture', domain: 'www.example-x.com' });
+assert(wwwHits2.length === 1, 'domain filter www-tolerant (www input)');
+
 // purge-all path (dashboard 'all' sends olderThanDays=0): must delete everything
 store.ingest([{ url: 'https://left.io/x', title: 'leftover', content: 'leftover content page. '.repeat(20), capturedAt: Date.now() - 5000 }]);
 await store.flushEmbeddings();

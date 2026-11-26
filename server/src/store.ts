@@ -446,8 +446,10 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
     const conds = ['pages_fts MATCH ?'];
     const args: (string | number)[] = [match];
     if (params.domain) {
-      conds.push('p.domain = ?');
-      args.push(params.domain);
+      // www-tolerance: users type the bare domain, captures store the host
+      const bare = params.domain.replace(/^www\./, '');
+      conds.push("(p.domain = ? OR p.domain = 'www.' || ?)");
+      args.push(bare, bare);
     }
     if (params.since !== undefined) {
       conds.push('p.captured_at >= ?');
@@ -525,8 +527,9 @@ export function createStore(dbPath: string, embedText: EmbedFn = embedOne) {
     const conds = [`p.id IN (${ids.map(() => '?').join(',')})`];
     const args: (string | number)[] = [...ids];
     if (params.domain) {
-      conds.push('p.domain = ?');
-      args.push(params.domain);
+      const bare = params.domain.replace(/^www\./, '');
+      conds.push("(p.domain = ? OR p.domain = 'www.' || ?)");
+      args.push(bare, bare);
     }
     if (params.since !== undefined) {
       conds.push('p.captured_at >= ?');
