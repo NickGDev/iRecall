@@ -2,6 +2,7 @@
 // Uses a deterministic fake embedder so no model download is needed. Run: npm run selfcheck
 import type { EmbedFn } from './store.js';
 import { createStore, EMBED_DIM } from './store.js';
+import { runEval } from './eval-queries.js';
 
 function assert(cond: boolean, label: string): void {
   if (!cond) throw new Error(`FAIL: ${label}`);
@@ -240,4 +241,12 @@ exStore.close();
 store2.close();
 
 store.close();
+
+// golden-query eval: corpus + queries with known right pages (see
+// eval-queries.ts). Hermetic — fake embedder — so it measures the search
+// mechanism, not granite quality.
+const ev = await runEval(Date.now(), fakeEmbed);
+for (const line of ev.lines) console.log(line);
+assert(ev.failures.length === 0, `eval set: ${ev.passed}/${ev.total} golden queries pass`);
+
 console.log('selfcheck: PASS');
